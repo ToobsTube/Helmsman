@@ -1,0 +1,13 @@
+{
+  "diagnostics.globals": [
+    "unit", "system", "construct", "player", "core", "library", "json",
+    "antigrav", "antigrav_1", "navdb", "navdb_1", "navdb_2",
+    "vBooster", "vBooster_1", "vBooster_2", "vBooster_3", "vBooster_4",
+    "hover", "hover_1", "hover_2", "hover_3", "hover_4",
+    "radar", "radar_1", "radar_2", "warpdrive", "warpdrive_1",
+    "slot1", "slot2", "slot3", "slot4", "slot5", "slot6", "slot7", "slot8", "slot9", "slot10",
+    "vec3", "Navigator", "axisCommandId", "axisCommandType", "constants", "utils",
+    "timerId", "tag", "action", "text"
+  ],
+  "diagnostics.disable": ["lowercase-global"]
+}
