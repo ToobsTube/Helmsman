@@ -53,6 +53,7 @@ CollisionStop = true --export: When the AUTOPILOT is flying toward a radar conta
 AutoLevel        = true  --export: Auto-level roll in atmosphere when you're not rolling
 HoverHeight      = 4     --export: Hover height in metres when you press G to lift off (hover engines / vertical boosters)
 AutoLand         = true  --export: Surface targets: after stopping above the spot, the AP descends straight down (through the atmosphere, under the burn speed) and lands. Off = it stops above and waits for G
+DescentHeight    = 100   --export: AutoLand: the fast descent stops this many metres above the spot (when its altitude is known), then the normal landing does the rest. Lower = quicker (min 30)
 GLandsDirect     = false --export: G while flying lands in one press. Off = G goes to hover first, then G again lands
 StartMode        = 1     --export: Mode when you sit down. 1 = Flight, 2 = Maneuver (Alt+4 switches)
 LandSpeed        = 150   --export: Fastest landing descent in km/h, used while well above the highest terrain (atlas) or when hovers/boosters can see far enough to stop. Below that without hovers/boosters: TouchdownSpeed.
@@ -269,17 +270,34 @@ Nav.axisCommandManager:deactivateGroundEngineAltitudeStabilization()
 -- OnGround: we believe the ship is sitting on something (parked at
 -- startup, or a landing finished). Any real movement clears it.
 OnGround = false
+-- Landing gear: the command is queued and sent from the HUD timer, not
+-- from wherever SetHover was called. When the AP's descent started the
+-- landing from inside the physics update (onFlush) the gear never came
+-- out (Carl, first auto-descent); from the G key it always did.
+GearWant, GearErrShown = nil, false
+function SetGear(down) GearWant = down end
+function ApplyGear()
+  if GearWant == nil then return end
+  local f = GearWant and unit.deployLandingGears or unit.retractLandingGears
+  GearWant = nil
+  local ok, err = pcall(f)
+  if not ok and not GearErrShown then
+    GearErrShown = true
+    system.print('[HELM] landing gear command failed: '..tostring(err))
+  end
+end
+
 function SetHover(on, forceLand)
   local acm = Nav.axisCommandManager
   if on then
     HoverState, HoverOn = "hover", true
-    pcall(unit.retractLandingGears)
+    SetGear(false)
     acm:setTargetGroundAltitude(HoverHeight)
     acm:activateGroundEngineAltitudeStabilization(HoverHeight)
     ParkBrake = false
   elseif HoverState == "hover" or forceLand then
     HoverState, HoverOn = "landing", true
-    pcall(unit.deployLandingGears)
+    SetGear(true)
     acm:deactivateGroundEngineAltitudeStabilization()
     -- Phase 1 "stop": nothing may keep pushing the ship while it stops.
     acm:resetCommand(axisCommandId.longitudinal)
@@ -289,7 +307,7 @@ function SetHover(on, forceLand)
     landStart, landSettle = now(), nil
   else
     HoverState, HoverOn = "landed", false
-    pcall(unit.deployLandingGears)
+    SetGear(true)
     acm:deactivateGroundEngineAltitudeStabilization()
     LandAcc = vec3()
   end
@@ -1154,7 +1172,7 @@ function SetTarget(name, posStr)
       if up:len() < EPS then up = vec3(0, 0, 1) end
       note = "centre of "..B.name.." picked — stops above the side facing you"
     end
-    -- Fast descent ends 500 m above the spot when its altitude can be
+    -- Fast descent ends DescentHeight (100 m) above the spot when its altitude can be
     -- trusted (saved/pasted from the ground: above sea level). Altitude 0
     -- or less is typical of map picks, so then only down to the atlas
     -- highest terrain + 300 m; the landing's sensors do the rest.
@@ -1162,7 +1180,7 @@ function SetTarget(name, posStr)
     if note:find("centre of", 1, true) then
       descentR = nil                                  -- no real spot: no auto-descent
     elseif spotR > B.r + 1 then
-      descentR = spotR + 500
+      descentR = spotR + mmax(tonumber(DescentHeight) or 100, 30)
     else
       descentR = B.top + 300
     end
@@ -1286,6 +1304,16 @@ function APArrive()
   Msg("Arrived: "..AP.name.."  ("..FormatDist(d).." out, brakes held)")
 end
 
+-- Roll toward wings-level about the nose (wv = world down). atan2 so a
+-- ship that is upside down rolls over promptly; asin read ~0 there and
+-- it only slowly tipped over (Carl: "it is staying upside down").
+-- Nothing when the nose points nearly straight up/down (roll undefined).
+function RollLevelAV(fwd, right, up, wv)
+  if mabs(fwd:dot(wv)) > 0.9 then return vec3() end
+  local err = math.atan(right:dot(wv), -up:dot(wv))   -- + = right wing low
+  return fwd * -clamp(err * 1.5, -0.5, 0.5)
+end
+
 -- ── Descent: hold point above a surface spot → straight down → landing ──
 -- Carl: players like to be in the atmosphere before the landing starts
 -- (it's quicker). After the stop above the spot the AP falls straight down
@@ -1349,10 +1377,9 @@ function APDescentStep(pos, vel, fwd, up, mass)
   AP.brake, AP.accel, AP.phase = brake, 0, "DESCENT"
   -- Nose level (pitch + roll to the horizon), heading kept.
   local wv = glen > 0.01 and g / glen or dn
-  local rollAng  = math.asin(clamp(vec3(construct.getWorldOrientationRight()):dot(wv), -1, 1))
   local pitchAng = math.asin(clamp(fwd:dot(wv), -1, 1))
   local right = vec3(construct.getWorldOrientationRight())
-  AP.angVel = right * clamp(pitchAng * 1.5, -0.5, 0.5) - fwd * clamp(rollAng * 1.5, -0.5, 0.5)
+  AP.angVel = right * clamp(pitchAng * 1.5, -0.5, 0.5) + RollLevelAV(fwd, right, up, wv)
   AP.alignErr = math.deg(mabs(pitchAng))
   -- Hand over to the landing: fast part done (and slowed), or the ground
   -- engines can already see the ground (spot higher than we thought).
@@ -1541,6 +1568,11 @@ function APStep(pos, vel, fwd, up, mass)
   -- atmosphere a later version may want to steer here.
   if brake == 1 and AP.phase ~= "KILL DRIFT" then AP.angVel = vec3()
   else AP.angVel = AlignAV(fwd, aim, up) end
+  -- In gravity, keep the wings level (roll round the nose only, so the
+  -- aim is unchanged). Carl: arriving upside down above a planet would
+  -- freak people out.
+  local gv = vec3(core.getWorldGravity())
+  if gv:len() > 0.5 then AP.angVel = AP.angVel + RollLevelAV(fwd, vec3(construct.getWorldOrientationRight()), up, gv / gv:len()) end
 
   -- Approach line for the stop report (direction when braking began).
   -- Only the final approach counts (not corner braking).
@@ -2701,6 +2733,7 @@ end
 
 function FlightTick(id)
   if id == "hud" then
+    ApplyGear()
     if StatusMsg ~= "" and now() > StatusUntil then StatusMsg = "" end
     DrawHUD()
   elseif id == "nav" then
