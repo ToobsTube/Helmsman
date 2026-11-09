@@ -52,6 +52,7 @@ CollisionStop = true --export: When the AUTOPILOT is flying toward a radar conta
 -- ── Flight feel (DU default values) ───────────────────────────────
 AutoLevel        = true  --export: Auto-level roll in atmosphere when you're not rolling
 HoverHeight      = 4     --export: Hover height in metres when you press G to lift off (hover engines / vertical boosters)
+AutoLand         = true  --export: Surface targets: after stopping above the spot, the AP descends straight down (through the atmosphere, under the burn speed) and lands. Off = it stops above and waits for G
 GLandsDirect     = false --export: G while flying lands in one press. Off = G goes to hover first, then G again lands
 StartMode        = 1     --export: Mode when you sit down. 1 = Flight, 2 = Maneuver (Alt+4 switches)
 LandSpeed        = 150   --export: Fastest landing descent in km/h, used while well above the highest terrain (atlas) or when hovers/boosters can see far enough to stop. Below that without hovers/boosters: TouchdownSpeed.
@@ -868,7 +869,7 @@ if Atlas then
           local atm  = tonumber(b.atmosphereRadius) or 0
           local surf = r + (tonumber(b.surfaceMaxAltitude) or r*0.05)
           local gm = tonumber(b.GM) or ((tonumber(b.gravity) or 0) * r * r)
-          Bodies[#Bodies+1] = { id=id, name=tostring(n or ("body "..tostring(id))), c=V(b.center), r=r, hard=mmax(atm, surf), top=surf, gm=gm }
+          Bodies[#Bodies+1] = { id=id, name=tostring(n or ("body "..tostring(id))), c=V(b.center), r=r, hard=mmax(atm, surf), top=surf, atm=atm, gm=gm }
         end
       end
     end
@@ -1135,6 +1136,7 @@ function StopDist() return AP.surface and 0 or StopDistance end
 function ArriveTol() return AP.surface and 25 or 0 end
 
 function SetTarget(name, posStr)
+  local descentR
   local p, err = ParsePos(posStr)
   if not p then Msg("Bad location: "..err) return false end
   local note
@@ -1152,13 +1154,25 @@ function SetTarget(name, posStr)
       if up:len() < EPS then up = vec3(0, 0, 1) end
       note = "centre of "..B.name.." picked — stops above the side facing you"
     end
+    -- Fast descent ends 500 m above the spot when its altitude can be
+    -- trusted (saved/pasted from the ground: above sea level). Altitude 0
+    -- or less is typical of map picks, so then only down to the atlas
+    -- highest terrain + 300 m; the landing's sensors do the rest.
+    local spotR = (p - B.c):len()
+    if note:find("centre of", 1, true) then
+      descentR = nil                                  -- no real spot: no auto-descent
+    elseif spotR > B.r + 1 then
+      descentR = spotR + 500
+    else
+      descentR = B.top + 300
+    end
     p = B.c + up * (B.hard + PlanetClearance)
   end
   local wasActive = AP.active
   if wasActive then APDisengage(nil) end
   name = (name and name:match("^%s*(.-)%s*$")) or ""
   AP.target, AP.posStr, AP.note = p, posStr:match("::pos%b{}"), note
-  AP.surface, AP.surfB = B ~= nil, B
+  AP.surface, AP.surfB, AP.descentR, AP.descent = B ~= nil, B, descentR, false
   AP.name = name ~= "" and name or "Pasted location"
   AP.legs, AP.leg = nil, 1
   AP.lastObsId, AP.obs = nil, nil   -- new target: an old "carry on anyway" doesn't carry over
@@ -1183,6 +1197,10 @@ end
 -- ── Autopilot engage / disengage ──────────────────────────────────
 function APEngage()
   if not AP.target then Msg("No target — paste a ::pos{...} into Lua chat") return false end
+  AP.descent = false
+  -- Already above the surface spot (e.g. braked during the descent, Alt+1
+  -- again): carry on down instead of refusing for being in atmosphere.
+  if CanDescend() then StartDescent() return true end
   if (unit.getAtmosphereDensity() or 0) > 0.0001 then
     Msg("Autopilot is space-only for now — leave the atmosphere first") return false
   end
@@ -1218,6 +1236,7 @@ function APDisengage(reason)
   if not AP.active then return end
   BrakeLearnSave()
   AP.active, AP.phase, AP.accel, AP.brake, AP.angVel = false, "OFF", 0, 0, vec3()
+  AP.descent = false
   Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
   if reason then Msg("AP off — "..reason) end
 end
@@ -1267,6 +1286,85 @@ function APArrive()
   Msg("Arrived: "..AP.name.."  ("..FormatDist(d).." out, brakes held)")
 end
 
+-- ── Descent: hold point above a surface spot → straight down → landing ──
+-- Carl: players like to be in the atmosphere before the landing starts
+-- (it's quicker). After the stop above the spot the AP falls straight down
+-- the down line: gravity does the accelerating, brakes hold the speed to
+-- the lower of (a) what it can still stop from before AP.descentR,
+-- (b) 85% of the ship's atmospheric burn speed (only on bodies with an
+-- atmosphere), (c) the `speed` cap. No engine thrust, nose kept level.
+-- At AP.descentR, or as soon as the hovers/boosters see the ground, the
+-- normal landing (the one G starts) takes over.
+function BurnCap()
+  local ok, v = pcall(construct.getFrictionBurnSpeed)
+  if ok and type(v) == "number" and v > 10 then return v * 0.85 end
+  return 250                                   -- ~900 km/h if DU won't say
+end
+
+function CanDescend()
+  if not (AutoLand and AP.target and AP.surfB and AP.descentR) then return false end
+  local pos = vec3(construct.getWorldPosition())
+  local B = AP.surfB
+  local up = norm(AP.target - B.c)
+  local rel = pos - B.c
+  local side = (rel - up * rel:dot(up)):len()           -- off the down line
+  local r = rel:len()
+  -- On the down line (within 200 m), above where the descent ends, and
+  -- no higher than the hold point (+2 km slack).
+  return rel:dot(up) > 0 and side < 200 and r > AP.descentR + 20
+     and r < (AP.target - B.c):len() + 2000
+end
+
+function StartDescent()
+  AP.active, AP.descent, AP.phase = true, true, "DESCENT"
+  AP.accel, AP.brake, AP.angVel = 0, 0, vec3()
+  ParkBrake = false
+  Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
+  local B = AP.surfB
+  local h = (vec3(construct.getWorldPosition()) - B.c):len() - AP.descentR
+  Msg("Descending to "..AP.name.." ("..FormatDist(h).." down) — brake to stop")
+end
+
+function APDescentStep(pos, vel, fwd, up, mass)
+  local B = AP.surfB
+  local g = vec3(core.getWorldGravity())
+  local glen = g:len()
+  local rel = pos - B.c
+  local dn = norm(B.c - pos)                     -- straight down
+  local goal = rel:len() - AP.descentR           -- metres of fast descent left
+  local vDown = vel:dot(dn)
+  local hSpeed = (vel - dn * vDown):len()
+  -- Braking while falling: brakes minus gravity.
+  local ab = mmax(BrakeAccel(mass) - glen, 0.3)
+  local vmax = BrakeVmax(mmax(goal, 0), ab)
+  if (B.atm or 0) > 0 then vmax = mmin(vmax, BurnCap()) end
+  vmax = mmin(vmax, CruiseCap())
+  local brake = 0
+  if vDown > vmax + 1 then brake = 1 end
+  -- Sideways drift: brakes (they push against all of our motion).
+  -- All of it, not just above 2 m/s: 2 m/s for a 90 s fall is ~180 m off
+  -- the line (sim). Brakes also slow the fall a little, which is fine.
+  if hSpeed > 0.2 then brake = mmax(brake, clamp(hSpeed / 2, 0.2, 1)) end
+  AP.remaining, AP.vAlong, AP.vDes = goal, vDown, vmax
+  AP.brake, AP.accel, AP.phase = brake, 0, "DESCENT"
+  -- Nose level (pitch + roll to the horizon), heading kept.
+  local wv = glen > 0.01 and g / glen or dn
+  local rollAng  = math.asin(clamp(vec3(construct.getWorldOrientationRight()):dot(wv), -1, 1))
+  local pitchAng = math.asin(clamp(fwd:dot(wv), -1, 1))
+  local right = vec3(construct.getWorldOrientationRight())
+  AP.angVel = right * clamp(pitchAng * 1.5, -0.5, 0.5) - fwd * clamp(rollAng * 1.5, -0.5, 0.5)
+  AP.alignErr = math.deg(mabs(pitchAng))
+  -- Hand over to the landing: fast part done (and slowed), or the ground
+  -- engines can already see the ground (spot higher than we thought).
+  local seesGround = #GroundEngines > 0 and ReadGroundDist() >= 0
+  if (goal <= 5 and vDown < 5) or seesGround then
+    local name = AP.name
+    APDisengage(nil)
+    SetHover(false, true)
+    Msg("Descent done — landing on "..name)
+  end
+end
+
 -- Angular velocity that turns `fwd` toward `aim`, proportional to the
 -- angle and capped at AlignRate. Torque tracking in FlightFlush adds the
 -- damping (same mechanism as manual stick input).
@@ -1286,6 +1384,7 @@ end
 --   same rule handles accelerating, killing sideways drift and cruising.
 --   Desired speed = min(cruise cap, speed we can still brake from).
 function APStep(pos, vel, fwd, up, mass)
+  if AP.descent then return APDescentStep(pos, vel, fwd, up, mass) end
   local legs = AP.legs
   -- Final leg: aim at the target shifted by the look-ahead correction
   -- (PredictCorrect), so gravity during braking carries us onto the point.
@@ -1340,7 +1439,11 @@ function APStep(pos, vel, fwd, up, mass)
     end
   elseif remaining <= ArriveTol() and AP.leg == #legs then
     brake, AP.phase = 1, "STOPPING"
-    if speed < 2 then APArrive() return end
+    if speed < 2 then
+      APArrive()
+      if CanDescend() then StartDescent() end
+      return
+    end
   elseif speed > vBrake + mmax(3, vBrake * 0.01) or vAlong > vCap * 1.03 + 10 then
     -- Stopping curve checked against the WHOLE speed, not just the part
     -- toward the target: coming out of a dog-leg corner the motion still
@@ -2215,7 +2318,7 @@ end
 
 -- ── HUD (AR overlay) ──────────────────────────────────────────────
 local PHASE_COL = { OFF="#7f8c99", ALIGN="#ffc24b", BURN="ACC", CRUISE="#5be37a",
-  BRAKING="#ff9a3c", STOPPING="#ff9a3c", OBSTACLE="#ff3b3b", ["KILL DRIFT"]="#ffc24b", CORRECT="#ffc24b", ARRIVED="#5be37a" }
+  BRAKING="#ff9a3c", STOPPING="#ff9a3c", OBSTACLE="#ff3b3b", DESCENT="ACC", ["KILL DRIFT"]="#ffc24b", CORRECT="#ffc24b", ARRIVED="#5be37a" }
 
 -- ── Fighter-style attitude HUD (Alt+6 / "fhud") ───────────────────
 -- Centre-screen SVG: pitch ladder + horizon, roll scale, fixed ship

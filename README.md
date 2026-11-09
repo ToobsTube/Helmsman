@@ -8,7 +8,7 @@ A Dual Universe seat flight script with a space autopilot. It is the companion t
 - **Navigator link**: NAVIGATE in Navigator and the target appears here. With Navigator's AUTO FLY on, the AP engages by itself and route stops chain.
 - AR overlay HUD showing target, distance, ETA, speed, braking distance, and AP phase.
 
-> v0.1 is **space-to-space only**. Targets on a planet surface are converted to a hold point in space straight above them (outside the atmosphere *and* above the highest terrain, which matters for Thades). The AP stops right on that point, not `StopDistance` short, so G lands you on the spot. Picking a body's centre on the map gives the side facing you. Atmo takeoff and landing are planned for a later version.
+> Surface targets: the AP flies to a hold point in space straight above the spot (outside the atmosphere *and* above the highest terrain, which matters for Thades) and stops right on it, not `StopDistance` short. With **AutoLand** on (default) it then **descends straight down the down line**: gravity does the accelerating, the brakes keep the speed under 85% of the ship's atmospheric burn speed and stop the fast part 500 m above the spot (or above the atlas's highest terrain when the location's altitude is 0, as map picks often are). The normal landing then sets you down. Brake at any time stops it; Alt+1 above the spot carries on down. AutoLand off: it stops above and waits for G. Picking a body's centre on the map gives the side facing you (no auto-descent: there is no real spot). Take-off from the ground to space is planned next.
 
 ## Build
 
@@ -98,6 +98,7 @@ The script checks how much thrust the ship has in each of the 6 directions. That
 | StartMode | 1 | 1 = Flight, 2 = Maneuver when you sit down |
 | ManeuverSpeed | 100 | Maneuver mode top speed, km/h |
 | HoverHeight | 4 | Hover height (m) after pressing G |
+| AutoLand | true | Surface targets: descend straight down from the hold point and land. Off = stop above and wait for G |
 | GLandsDirect | false | On: G while flying starts landing in one press. Off: G goes to hover first, then G again lands |
 | LandSpeed | 150 | Fastest landing descent, km/h. Reached while the ship is above the highest terrain in the atlas (plus 300 m), or when the hovers/boosters can see far enough to stop. `landsafety N` sets how hard it plans to brake |
 | TouchdownSpeed | 15 | Landing speed (km/h) for the last 2 m before touchdown, or the whole landing if no hover/booster is linked. Higher is quicker but lands harder |
