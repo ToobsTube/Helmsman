@@ -4,11 +4,28 @@ A Dual Universe seat flight script with a space autopilot. It is the companion t
 
 - Normal manual flight (DU's standard flight model: throttle, cruise control, hovers, boosters, gear, anti-grav).
 - **Space autopilot**: align, burn, cruise, and brake to a full stop `StopDistance` short of the target. Routes around planets automatically.
+- **Surface to surface**: Alt+1 on the ground takes off and climbs out of the atmosphere; a surface destination ends with a straight descent and landing on the spot.
+- **Radar**: collision warning on the HUD, and the AP stops short of anything in its path.
 - **Paste to fly**: paste any `::pos{...}` (or `Name ::pos{...}`) into Lua chat and the ship flies there.
 - **Navigator link**: NAVIGATE in Navigator and the target appears here. With Navigator's AUTO FLY on, the AP engages by itself and route stops chain.
 - AR overlay HUD showing target, distance, ETA, speed, braking distance, and AP phase.
 
-> Surface targets: the AP flies to a hold point in space straight above the spot (outside the atmosphere *and* above the highest terrain, which matters for Thades) and stops right on it, not `StopDistance` short. With **AutoLand** on (default) it then **descends straight down the down line**: gravity does the accelerating, the brakes keep the speed under 85% of the ship's atmospheric burn speed and stop the fast part `DescentHeight` (100 m) above the spot (or above the atlas's highest terrain when the location's altitude is 0, as map picks often are). The normal landing then sets you down. Brake at any time stops it; Alt+1 above the spot carries on down. AutoLand off: it stops above and waits for G. Picking a body's centre on the map gives the side facing you (no auto-descent: there is no real spot). Take-off from the ground to space is planned next.
+> Surface targets: the AP flies to a hold point in space straight above the spot (outside the atmosphere *and* above the highest terrain, which matters for Thades) and stops right on it, not `StopDistance` short. With **AutoLand** on (default) it then **descends straight down the down line**: gravity does the accelerating, the brakes keep the speed under 85% of the ship's atmospheric burn speed and stop the fast part `DescentHeight` (100 m) above the spot (or above the atlas's highest terrain when the location's altitude is 0, as map picks often are). The normal landing then sets you down. Brake at any time stops it; Alt+1 above the spot carries on down. AutoLand off: it stops above and waits for G. Picking a body's centre on the map gives the side facing you (no auto-descent: there is no real spot).
+
+## Take-off (Alt+1 on the ground or in atmosphere)
+
+Set a target, then press **Alt+1** (or type `ap` / `go`) while landed or flying in atmosphere:
+
+1. **LIFT**: hovers / vertical boosters lift the ship to hover height, as G does.
+2. **LINE UP**: brakes on, the ship turns level toward the destination. The radar checks that no static construct stands in the climb path; if one does, the take-off stops and says which. Fly clear by hand, or press Alt+1 again within 20 s to go anyway. (Ships only give the radar a distance, so they can't be checked.)
+3. **CLIMB**: main engines only. The nose comes up **only as forward speed builds** (level below 54 km/h, full climb angle from 180 km/h) and comes back down if the speed drops, so the ship is never steep and slow. The full angle comes from thrust-to-weight (shallower for heavy ships), up to `MaxClimbAngle`; if the ship isn't actually climbing it raises the angle step by step to that limit, and tells you if it still can't. Speed stays under 85% of the burn speed. Wings stay level.
+4. Once out of the atmosphere (1 km above it), the normal space AP takes over: route around planets, cruise, stop. A surface destination then descends and lands as above.
+
+Only your own Alt+1 / `ap` / `go` starts a take-off. Navigator's Auto Fly or a pasted `::pos` while parked just sets the target and says "Alt+1 to take off". Brake stops the take-off at any moment.
+
+### Orbit hop (same planet, far side)
+
+When the destination is a surface spot on the **same planet**, the planet is in the way, and that planet **has an atmosphere**, the AP flies a low orbit round it (`ORBIT` phase) instead of the corner route. It stays near the height it starts at (at least 2 km above the atmosphere, at most `PlanetClearance` above it; the hold point above the spot moves to that height too) at just under orbital speed (about 3,700 km/h on Alioth), so it mostly coasts with the nose level along the curve; height is kept by small speed changes, never by pointing at the planet. Near the far side it hands over to the normal stop and auto-descent. This also works when you engage from low orbit near that planet. Moons and airless bodies always use the normal route at full speed: there's no burn speed there, so nothing is limited. `OrbitHop = false` turns it off.
 
 ## Build
 
@@ -99,6 +116,8 @@ The script checks how much thrust the ship has in each of the 6 directions. That
 | ManeuverSpeed | 100 | Maneuver mode top speed, km/h |
 | HoverHeight | 4 | Hover height (m) after pressing G |
 | AutoLand | true | Surface targets: descend straight down from the hold point and land. Off = stop above and wait for G |
+| OrbitHop | true | Far side of the same atmosphere planet: low orbit at orbital speed instead of the corner route. Moons always use the normal full-speed route |
+| MaxClimbAngle | 45 | Take-off: steepest nose-up angle (10-60°). Heavy ships use less; raised automatically up to this if the ship isn't climbing |
 | DescentHeight | 100 | AutoLand: metres above the spot where the fast descent hands over to the normal landing (min 30) |
 | GLandsDirect | false | On: G while flying starts landing in one press. Off: G goes to hover first, then G again lands |
 | LandSpeed | 150 | Fastest landing descent, km/h. Reached while the ship is above the highest terrain in the atlas (plus 300 m), or when the hovers/boosters can see far enough to stop. `landsafety N` sets how hard it plans to brake |

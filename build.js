@@ -119,7 +119,13 @@ function buildJson(handlers) {
 
 const lua = fs.readFileSync(SRC, 'utf8').replace(/\r\n/g, '\n');
 if (lua.includes('\t')) throw new Error('Tabs found in source — YAML block scalars need spaces.');
-const handlers = parseHandlers(lua);
+// Build stamp (local time, MMDD-HHMM): shown on the HUD strip so a tester
+// can see at a glance which paste is running.
+const d = new Date(), p2 = n => String(n).padStart(2, '0');
+const STAMP = p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes());
+if (!/BUILD\s*=\s*"dev"/.test(lua)) throw new Error('BUILD = "dev" line missing in source');
+const handlers = parseHandlers(lua.replace(/BUILD(\s*)=(\s*)"dev"/, `BUILD$1=$2"${STAMP}"`));
+console.log(`Build stamp ${STAMP}`);
 
 fs.mkdirSync('dist', { recursive: true });
 for (const [file, text] of [[OUT_JSON, buildJson(handlers)], [OUT_CONF, buildConf(handlers)]]) {

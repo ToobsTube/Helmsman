@@ -23,6 +23,7 @@ event=onStart
 --  seat owners can still change them via "Edit Lua Parameters".
 -- ════════════════════════════════════════════════════════════════════
 VERSION = "0.1.0"
+BUILD   = "dev"   -- stamped by build.js (date-time), shown on the HUD so you can tell which paste is running
 
 -- ── Server ────────────────────────────────────────────────────────
 CustomAtlas = "atlas"  --export: Atlas file for your server. "atlas" = game default. Put custom files in Game/data/lua/autoconf/custom/ (or Game/data/lua/) and enter the file name without .lua
@@ -53,6 +54,8 @@ CollisionStop = true --export: When the AUTOPILOT is flying toward a radar conta
 AutoLevel        = true  --export: Auto-level roll in atmosphere when you're not rolling
 HoverHeight      = 4     --export: Hover height in metres when you press G to lift off (hover engines / vertical boosters)
 AutoLand         = true  --export: Surface targets: after stopping above the spot, the AP descends straight down (through the atmosphere, under the burn speed) and lands. Off = it stops above and waits for G
+MaxClimbAngle    = 45    --export: Take-off: steepest nose-up angle in degrees (10-60). The AP picks less for heavy ships, and only pitches up as forward speed builds
+OrbitHop         = true  --export: Surface spot on the far side of the SAME planet with an atmosphere: fly a low orbit round the planet (orbital speed, mostly coasting) instead of the corner route. Moons and airless bodies always use the normal route at full speed
 DescentHeight    = 100   --export: AutoLand: the fast descent stops this many metres above the spot (when its altitude is known), then the normal landing does the rest. Lower = quicker (min 30)
 GLandsDirect     = false --export: G while flying lands in one press. Off = G goes to hover first, then G again lands
 StartMode        = 1     --export: Mode when you sit down. 1 = Flight, 2 = Maneuver (Alt+4 switches)
@@ -1199,7 +1202,9 @@ function SetTarget(name, posStr)
   Msg("Target: "..AP.name..(note and ("  ("..note..")") or ""))
   -- Never leave the ship coasting: a new target mid-flight re-plans and
   -- keeps flying (if that fails, brakes go on).
-  if wasActive and not APEngage() then ParkBrake = true end
+  -- (true: the pilot already had the AP on, e.g. a new Navigator stop
+  -- arriving mid-climb must not stop the take-off.)
+  if wasActive and not APEngage(true) then ParkBrake = true end
   return true
 end
 
@@ -1213,21 +1218,24 @@ function ClearTarget()
 end
 
 -- ── Autopilot engage / disengage ──────────────────────────────────
-function APEngage()
+-- allowTakeoff: only the pilot's own Alt+1 / "ap" / "go" may start a
+-- take-off from a planet. Navigator's Auto Fly, a pasted ::pos and the
+-- warp resume never lift a parked ship off by themselves.
+function APEngage(allowTakeoff)
   if not AP.target then Msg("No target — paste a ::pos{...} into Lua chat") return false end
-  AP.descent = false
+  AP.descent, AP.takeoff, AP.orbit = false, nil, nil
   -- Already above the surface spot (e.g. braked during the descent, Alt+1
   -- again): carry on down instead of refusing for being in atmosphere.
   if CanDescend() then StartDescent() return true end
-  if (unit.getAtmosphereDensity() or 0) > 0.0001 then
-    Msg("Autopilot is space-only for now — leave the atmosphere first") return false
-  end
   local pos = vec3(construct.getWorldPosition())
-  local B = InsideBody(pos)
-  if B then Msg("Too close to "..B.name.." — climb clear of it first") return false end
+  if (unit.getAtmosphereDensity() or 0) > 0.0001 or InsideBody(pos) then
+    if not allowTakeoff then Msg("Target set — Alt+1 to take off") return false end
+    return StartTakeoff()
+  end
   RefreshShipStats()
   if MaxBrakeN <= 0 then Msg("No brakes detected — the AP needs brakes to stop") return false end
   if (AP.target - pos):len() <= StopDist() + 50 then Msg("Already at "..AP.name) return false end
+  if StartOrbitHop(pos) then return true end
   local legs, err = plan(pos, AP.target, 0)
   if not legs then Msg(err) return false end
   AP.legs, AP.leg = legs, 1
@@ -1254,7 +1262,7 @@ function APDisengage(reason)
   if not AP.active then return end
   BrakeLearnSave()
   AP.active, AP.phase, AP.accel, AP.brake, AP.angVel = false, "OFF", 0, 0, vec3()
-  AP.descent = false
+  AP.descent, AP.takeoff, AP.orbit = false, nil, nil
   Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
   if reason then Msg("AP off — "..reason) end
 end
@@ -1392,6 +1400,360 @@ function APDescentStep(pos, vel, fwd, up, mass)
   end
 end
 
+-- ── Take-off: ground / atmosphere → space ────────────────────────────
+-- Alt+1 while landed or in atmosphere (Carl's choices):
+--   LIFT     hovers/boosters lift to hover height (as G does)
+--   LINE UP  brakes on, turn level toward the destination; radar check
+--            that nothing static stands in the climb path
+--   CLIMB    main engines; the nose may only come up as forward speed
+--            builds (0° below 15 m/s → full climb angle at 50 m/s), and
+--            comes back down if speed drops — never steep and slow (Carl:
+--            SAGA tipped too far without forward movement). Full climb
+--            angle from thrust/weight (15° at 1:1, +30° per extra 1),
+--            capped by MaxClimbAngle. Speed kept under 85% burn speed.
+--   then, out of the atmosphere (and above the highest terrain), the
+--   normal space AP takes over: route, cruise, stop.
+function NearestBody(pos)
+  local best, bd
+  for _, B in ipairs(Bodies or {}) do
+    local d = (pos - B.c):len() - B.r
+    if not bd or d < bd then best, bd = B, d end
+  end
+  return best
+end
+
+-- Static radar contacts in the climb path (core position + size class;
+-- ships only give a distance, so they can't be placed). The thing we're
+-- sitting on/in (core within its size of us, sideways) is ignored.
+function TakeoffBlocked(pos, h, upW, climbRad)
+  local r = ActiveRadar
+  if not r then return nil end
+  local ids = rcall(r, "getConstructIds")
+  if type(ids) ~= "table" then return nil end
+  for i, id in ipairs(ids) do
+    if i > 60 then break end
+    local wp = rcall(r, "getConstructWorldPos", id)
+    if type(wp) == "table" and wp[1] and (wp[1] ~= 0 or wp[2] ~= 0 or wp[3] ~= 0) then
+      local rel = vec3(wp[1], wp[2], wp[3]) - pos
+      local vert = rel:dot(upW)
+      local horiz = rel - upW * vert
+      local Rp = (CORE_R[rcall(r, "getConstructCoreSize", id) or ""] or 64) + 15
+      if horiz:len() > Rp then
+        local along = horiz:dot(h)
+        local lat = (horiz - h * along):len()
+        -- Our height there, CAUTIOUSLY: 500 m of roll-out, then only 10°
+        -- (a heavy ship in the sim was still at hover height after 3 km).
+        -- A false 'blocked' costs one more Alt+1; a missed one doesn't.
+        local pathH = mmax(along - 500, 0) * math.tan(math.rad(10))
+        if along > 0 and along < 3000 and lat < Rp + 40 and vert + Rp > pathH - 20 then
+          return (rcall(r, "getConstructName", id) or "a construct").." ("..FormatDist(rel:len())..")"
+        end
+      end
+    end
+  end
+  return nil
+end
+
+function StartTakeoff()
+  RefreshShipStats()
+  SurveyThrust()
+  local pos = vec3(construct.getWorldPosition())
+  local vel = vec3(construct.getWorldVelocity())
+  if MaxThrustN <= 0 then Msg("No forward engines that work here — can't take off") return false end
+  local landed = HoverState == "landed"
+  if landed and #GroundEngines == 0 then
+    Msg("Take-off needs hovers or vertical boosters to lift off — lift off by hand, then Alt+1")
+    return false
+  end
+  local phase = "CLIMB"
+  if landed then phase = "LIFT"
+  elseif vel:len() < 30 and #GroundEngines > 0 and ReadGroundDist() >= 0 then phase = "LINE UP" end
+  -- Second Alt+1 within 20 s of a "blocked" stop = take off anyway.
+  local force = AP.toBlockedT and now() - AP.toBlockedT < 20
+  AP.toBlockedT = nil
+  AP.takeoff = { phase = phase, t0 = now(), B = NearestBody(pos), force = force }
+  AP.legs, AP.leg, AP.total, AP.obs, AP.descent = nil, 1, 0, nil, false
+  AP.active, AP.phase, AP.accel, AP.brake, AP.angVel = true, phase, 0, 0, vec3()
+  ParkBrake = false
+  if ParkHold then ParkHold = nil end
+  Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
+  if landed then SetHover(true) end
+  Msg("Take-off → "..AP.name..(force and " (anyway)" or "").." — brake to stop")
+  return true
+end
+
+function APTakeoffStep(pos, vel, fwd, up, mass)
+  local T = AP.takeoff
+  local B = T.B
+  local g = vec3(core.getWorldGravity())
+  local glen = g:len()
+  local wv = glen > 0.01 and g / glen or (B and norm(B.c - pos) or -up)
+  local upW = -wv
+  local right = vec3(construct.getWorldOrientationRight())
+  local speed = vel:len()
+  local inAtmo = (unit.getAtmosphereDensity() or 0) > 0.0001
+  AP.remaining, AP.vAlong, AP.vDes = (AP.target - pos):len(), vel:dot(fwd), 0
+
+  -- Out: no atmosphere, and 1 km clear of the atmosphere top / highest
+  -- terrain (the route planner treats anything within 500 m of that
+  -- shell as "blocked by the planet") → normal space AP.
+  local clear = not B or (pos - B.c):len() > B.hard + 1000
+  if not inAtmo and clear and not InsideBody(pos) then
+    local name = AP.name
+    APDisengage(nil)
+    Msg("Out of the atmosphere — on to "..name)
+    if not APEngage(true) then ParkBrake = true end
+    return
+  end
+
+  -- Level heading toward the destination (keep ours if it's straight up).
+  local fl = fwd - upW * fwd:dot(upW)
+  fl = fl:len() > 0.05 and norm(fl) or norm(up - upW * up:dot(upW))
+  local dT = norm(AP.target - pos)
+  local h = dT - upW * dT:dot(upW)
+  h = h:len() > 0.1 and norm(h) or fl
+
+  local twr = MaxThrustN / mmax(mass * glen, 1)
+  local climbMax = math.rad(clamp(15 + (twr - 1) * 30, 10, clamp(tonumber(MaxClimbAngle) or 45, 10, 60)))
+  local accel, brake, pitch, heading = 0, 0, 0, h
+
+  if T.phase == "LIFT" then
+    heading = fl                                   -- no turning before we're up
+    local gd = ReadGroundDist()
+    if (gd >= HoverHeight - 1.5 and mabs(vel:dot(upW)) < 0.5) or now() - T.t0 > 8 then
+      T.phase, T.t0 = "LINE UP", now()
+    end
+  elseif T.phase == "LINE UP" then
+    brake = 1
+    if not T.checked then
+      T.checked = true
+      local why = not T.force and TakeoffBlocked(pos, h, upW, climbMax)
+      if why then
+        AP.toBlockedT = now()
+        APDisengage(nil)
+        ParkBrake = true
+        Msg("Take-off stopped — "..why.." is in the climb path. Fly clear by hand, or Alt+1 again within 20 s to go anyway")
+        return
+      end
+    end
+    local err = math.acos(clamp(fl:dot(h), -1, 1))
+    local spin = vec3(construct.getWorldAngularVelocity()):len()
+    if (err < math.rad(3) and spin < 0.05) or now() - T.t0 > 30 then
+      T.phase, T.t0 = "CLIMB", now()
+    end
+  else -- CLIMB
+    local vF = vel:dot(fwd)
+    local vUp = vel:dot(upW)
+    -- Not actually climbing at full angle and good speed (no wings, or
+    -- not enough of them: sim, a 1.3:1 ship skimmed the ground at 24°):
+    -- raise the angle 3°/s, up to MaxClimbAngle. Climbing well again →
+    -- ease it back. The speed rule below still applies on top.
+    local tNow = now()
+    local dtc = clamp(tNow - (T.tc or tNow), 0, 0.5)
+    T.tc = tNow
+    local capRad = math.rad(clamp(tonumber(MaxClimbAngle) or 45, 10, 60))
+    local full = climbMax + (T.extra or 0)
+    if vF > 50 and fwd:dot(upW) > math.sin(full) - 0.05 then
+      if vUp < 5 then T.extra = (T.extra or 0) + math.rad(3) * dtc
+      elseif vUp > 20 then T.extra = mmax((T.extra or 0) - math.rad(1) * dtc, 0) end
+    end
+    T.extra = clamp(T.extra or 0, 0, mmax(capRad - climbMax, 0))
+    climbMax = climbMax + T.extra
+    if climbMax >= capRad - 0.01 and vUp < 2 and vF > 50 then
+      T.sinkT = T.sinkT or tNow
+      if tNow - T.sinkT > 8 and not T.warned then
+        T.warned = true
+        Msg("Can't climb at "..string.format("%.0f", math.deg(capRad)).."° — not enough thrust or lift. Brake and fly by hand, or raise MaxClimbAngle")
+      end
+    else T.sinkT = nil end
+    pitch = climbMax * clamp((vF - 15) / 35, 0, 1)
+    local aMax = MaxThrustN / mmax(mass, 1)
+    -- Gentle push while the nose is still coming up, full once it's there.
+    -- (1.5× gravity along the nose: a real climb starts as soon as the nose
+    -- lifts, not 6 s skimming the ground at hover height — sim.)
+    accel = (pitch < climbMax * 0.98) and mmin(aMax, 6 + 1.5 * glen * mmax(fwd:dot(upW), 0)) or aMax
+    local cap = CruiseCap()
+    if inAtmo and B and (B.atm or 0) > 0 then cap = mmin(cap, BurnCap()) end
+    if speed > cap then
+      -- Keep enough thrust to go on climbing (1.15 g upward) and let the
+      -- brakes take the excess speed. Cutting thrust to 'hold speed along
+      -- the nose' left less lift than gravity: the sim sank back from
+      -- 8.3 km while sitting at the speed cap.
+      accel = mmin(aMax, glen * 1.15 / mmax(fwd:dot(upW), 0.3))
+      brake = clamp((speed - cap) / 20, 0, 1)
+    end
+  end
+
+  local want = heading * math.cos(pitch) + upW * math.sin(pitch)
+  AP.angVel = AlignAV(fwd, want, up) + RollLevelAV(fwd, right, up, wv)
+  AP.alignErr = math.deg(math.acos(clamp(fwd:dot(want), -1, 1)))
+  AP.accel, AP.brake, AP.phase = accel, brake, T.phase
+end
+
+-- ── Orbit hop: far side of the same planet (atmosphere planets only) ──
+-- Carl: orbit hops only on planets with an atmosphere; moons keep the
+-- normal route at full speed (no SAGA/Arch-style 1000 km/h limits there).
+-- Instead of straight lines out to corners, the ship follows the great
+-- circle round the planet at the hold-point height (atmosphere top +
+-- PlanetClearance) at just under orbital speed: gravity bends the path,
+-- the engines mostly coast. Rear engines only — the nose follows the
+-- curve, tilted a little up/down to hold height; brakes take any excess
+-- speed. Never flips. Near the spot (direct line clear of the planet and
+-- within ~2 braking distances) the normal AP does the stop and descent.
+function StartOrbitHop(pos)
+  local B = AP.surfB
+  if not (OrbitHop and B and (B.atm or 0) > 0 and AP.target) then return false end
+  local R0 = (AP.target - B.c):len()
+  local dist = (pos - B.c):len()
+  if dist > R0 + 2 * PlanetClearance then                                  -- not close: normal route
+    Msg(string.format("Orbit hop skipped: %s above the hop height (needs under %s)", FormatDist(dist - R0), FormatDist(2 * PlanetClearance)))
+    return false
+  end
+  local blk = firstBlock(pos, AP.target)
+  if blk ~= B then                                                         -- planet not in the way
+    if blk then Msg("Orbit hop skipped: "..blk.name.." is in the way first, not "..B.name) end
+    return false
+  end
+  local rp = norm(pos - B.c)
+  local q = norm(AP.target - B.c)
+  local cr = rp:cross(q)
+  local n
+  if cr:len() > 0.05 then n = cr / cr:len()
+  else
+    -- Spot (almost) exactly opposite: any way round is as short; go the
+    -- way we're already moving / facing.
+    local vel = vec3(construct.getWorldVelocity())
+    for _, d in ipairs({ vel, vec3(construct.getWorldOrientationForward()), vec3(0, 0, 1), vec3(1, 0, 0) }) do
+      local c = rp:cross(d)
+      if d:len() > 1 and c:len() > 0.1 * d:len() then n = c / c:len() break end
+    end
+  end
+  if not n then return false end
+  -- Fly round at about the height we start at (Carl: "it would be nice to
+  -- stay near the same altitude" — it climbed from ~6 to 16 km to reach
+  -- the usual hold height), never under 2 km above the atmosphere and
+  -- never higher than that hold height. The hold point above the spot
+  -- moves down to the same height, so there's no climb at the end either.
+  local Rorb = clamp(dist, B.hard + 2000, R0)
+  if Rorb < R0 - 1 then AP.target = B.c + q * Rorb; R0 = Rorb end
+  local arc = math.atan(cr:len(), rp:dot(q)) * R0
+  AP.orbit = { B = B, R0 = R0, n = n, tc = 0 }
+  AP.legs, AP.leg, AP.obs, AP.total = nil, 1, nil, arc
+  AP.bk = { time = 0, bands = {} }
+  AP.minRemaining, AP.approachDir, AP.aimOff, AP.latFix, AP.maxPast, AP.kdOn = nil, nil, vec3(), false, nil, false
+  if ParkHold then ParkHold = nil end
+  AP.active, AP.phase, AP.accel, AP.brake, AP.angVel = true, "ORBIT", 0, 0, vec3()
+  ParkBrake = false
+  Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
+  Msg("Orbit hop → "..AP.name.." round "..B.name.." ("..FormatDist(arc)..") — brake to stop")
+  return true
+end
+
+function APOrbitStep(pos, vel, fwd, up, mass)
+  local O = AP.orbit
+  local B = O.B
+  local rp, r = norm(pos - B.c)
+  local q = norm(AP.target - B.c)
+  local cr = rp:cross(q)
+  local cl = cr:len()
+  if cl > 0.05 then O.n = cr / cl end          -- plane through us and the spot
+  local n = O.n
+  local t = norm(n:cross(rp))                  -- along the circle, toward the spot
+  local s = math.atan(cl, rp:dot(q)) * O.R0    -- arc left
+  local speed = vel:len()
+  local ab = BrakeAccel(mass)
+  local remaining = (AP.target - pos):len()
+  AP.minRemaining = mmin(AP.minRemaining or remaining, remaining)
+
+  -- Twice a second: hand over to the normal AP once the straight line to
+  -- the hold point clears the planet and we're within ~2 stops of it.
+  local tn = now()
+  if tn - O.tc > 0.5 then
+    O.tc = tn
+    -- ...and only near the hop height (or right above the spot): handing
+    -- over 53 km too high sent the normal AP diving nose-first at the
+    -- planet toward the stop point (Carl stopped it). Too high = keep
+    -- orbiting, the orbit settles the height first, nose level.
+    local nearH = mabs(r - O.R0) < 2000 or s < 3000
+    if nearH and s < mmax(2 * BrakeDist(speed, ab), 20000) and SegmentClear(pos, AP.target) then
+      Msg("Orbit hop done — final approach to "..AP.name)
+      AP.orbit = nil
+      if not APEngage(true) then APDisengage(nil) ParkBrake = true end
+      return
+    end
+  end
+
+  local g = vec3(core.getWorldGravity())
+  local gIn = -g:dot(rp)                        -- gravity toward the centre
+  local gm = (B.gm or 0) > 0 and B.gm or mmax(gIn, 0.01) * r * r
+  local vOrb = msqrt(gm / O.R0)
+  local vt, vr, vn = vel:dot(t), vel:dot(rp), vel:dot(n)
+  local aMax = mmax(MaxThrustN / mmax(mass, 1), 0.1)
+
+  -- Height is held through SPEED, like a real orbit: a bit faster rises,
+  -- a bit slower sinks. The speed whose curve (v²/r) gives the wanted
+  -- radial acceleration is the target, so the nose stays along the
+  -- direction of travel (a first version steered height with thrust and
+  -- the nose swung from 20° down to straight up while coasting — sim).
+  local vR = clamp((O.R0 - r) / 40, -50, 50)
+  -- v²/r = gravity minus the net pull-in we want. Rising too fast (vr > vR)
+  -- wants more net pull-in, so LESS speed.
+  local inward = gIn + 0.3 * (vR - vr)
+  -- Limits from the orbital speed HERE (not at the hop height): 30 km too
+  -- high, 0.85× the hop-height speed is nearly orbital, so it couldn't sink
+  -- (Carl at 44 km, still climbing).
+  local vLoc = msqrt(gm / r)
+  local vT = clamp(msqrt(mmax(inward, 0) * r), vLoc * 0.85, vLoc * 1.1)
+  vT = mmin(vT, CruiseCap(), BrakeVmax(s, ab))
+  local At = 0.5 * (vT - vt)
+  local brake = 0
+  if vt > vT + 3 then brake = clamp((vt - vT) / 20, 0, 1) end
+  -- Climbing (or falling) much faster than wanted: speed alone only bends
+  -- the path ~2 m/s², so a fast climb out of the atmosphere coasted up to
+  -- 21 km (Carl). Brakes push against ALL of our motion, the climb too,
+  -- while the engines keep pushing along the circle: the up/down motion
+  -- dies in seconds, nose stays level.
+  -- Only against motion the WRONG way (rising when we should hold/sink,
+  -- falling when we should hold/climb), and never harder than the engines
+  -- can make up along the circle: braking just to "start sinking" stopped
+  -- a strong-braked ship dead at 25 km in the sim.
+  local vrErr, bR = vr - vR, 0
+  if vrErr > 15 and vr > 5 then bR = (vrErr - 15) / 40
+  elseif vrErr < -15 and vr < -5 then bR = (-vrErr - 15) / 40 end
+  bR = clamp(bR, 0, mmin(1, aMax * 0.8 / mmax(ab, 0.1)))
+  brake = mmax(brake, bR)
+  At = mmax(At, 0)
+  -- Still slow (just out of the climb): speed can't hold us up yet, so
+  -- part of the thrust lifts (never pushes down), the rest accelerates.
+  local Ar = 0
+  -- Also a safety floor: within 1 km of the atmosphere top (Carl's hop
+  -- started just above it and sank to 5.3 km, into the thin air top, at
+  -- 4,100 km/h) lift with thrust too. Higher up the gentle speed-only
+  -- climb stays (Carl liked it).
+  if vt < vOrb * 0.85 or r < (B.atm or 0) + 1000 then
+    Ar = mmax(0.3 * (vR - vr) + gIn - mmax(vt, 0) ^ 2 / r, 0)
+  end
+  local lat = rp * Ar + n * (-0.5 * vn)
+  local ll = lat:len()
+  if ll > aMax * 0.7 then lat = lat * (aMax * 0.7 / ll) end
+  local along = mmin(At, msqrt(mmax(aMax * aMax - lat:len() ^ 2, 0)))
+  -- Nose at most ~20° off the direction of travel: a small sideways or
+  -- lift need never swings it round (brakes take any extra speed).
+  -- While braking (slowing for the spot, weak brakes) up to 60°, so the
+  -- lift doesn't push forward harder than the brakes slow us.
+  along = mmax(along, lat:len() * (brake > 0 and 0.58 or 2.75))
+  local d = t * along + lat
+  local aim, accelWant = t, 0
+  if d:len() > 0.05 then aim, accelWant = d / d:len(), d:len() end
+  local ramp = clamp((fwd:dot(aim) - 0.966) / (0.996 - 0.966), 0, 1)
+
+  AP.remaining, AP.vAlong, AP.vDes = s, vt, vT
+  AP.accel, AP.brake, AP.phase = mmin(accelWant, aMax) * ramp, brake, "ORBIT"
+  local right = vec3(construct.getWorldOrientationRight())
+  AP.angVel = AlignAV(fwd, aim, up) + RollLevelAV(fwd, right, up, -rp)
+  AP.alignErr = math.deg(math.acos(clamp(fwd:dot(aim), -1, 1)))
+end
+
 -- Angular velocity that turns `fwd` toward `aim`, proportional to the
 -- angle and capped at AlignRate. Torque tracking in FlightFlush adds the
 -- damping (same mechanism as manual stick input).
@@ -1411,7 +1773,9 @@ end
 --   same rule handles accelerating, killing sideways drift and cruising.
 --   Desired speed = min(cruise cap, speed we can still brake from).
 function APStep(pos, vel, fwd, up, mass)
+  if AP.takeoff then return APTakeoffStep(pos, vel, fwd, up, mass) end
   if AP.descent then return APDescentStep(pos, vel, fwd, up, mass) end
+  if AP.orbit then return APOrbitStep(pos, vel, fwd, up, mass) end
   local legs = AP.legs
   -- Final leg: aim at the target shifted by the look-ahead correction
   -- (PredictCorrect), so gravity during braking carries us onto the point.
@@ -1883,6 +2247,13 @@ function FlightFlush()
     Nav:setEngineForceCommand('thrust analog longitudinal', fwd * AP.accel, keep)
     Nav:setEngineForceCommand('thrust analog lateral', vec3(), keep)
     Nav:setEngineForceCommand('thrust analog vertical', vec3(), keep)
+    if AP.takeoff then
+      -- Take-off: hovers / vertical boosters keep doing their hover job
+      -- (lift-off, then holding height during the roll-out).
+      local acm = Nav.axisCommandManager
+      local gAcc = acm:composeAxisAccelerationFromThrottle('thrust analog vertical', axisCommandId.vertical)
+      Nav:setEngineForceCommand('ground', GroundCmd(gAcc), keep, '', '', '', tol)
+    end
   elseif park or man then
     -- Every thruster, any direction, solved together (not collinear).
     Nav:setEngineForceCommand('thrust analog', park and parkAcc or manAcc, dontKeep, '', '', '', tol)
@@ -2080,7 +2451,7 @@ function OnActionStart(a)
   elseif a == "light" then
     if unit.isAnyHeadlightSwitchedOn() then unit.switchOffHeadlights() else unit.switchOnHeadlights() end
   elseif a == "option1" then
-    if AP.active then APDisengage("Alt+1") else APEngage() end
+    if AP.active then APDisengage("Alt+1") else APEngage(true) end
   elseif a == "option2" then ClearTarget()
   elseif a == "option3" then
     HudOn = not HudOn
@@ -2176,8 +2547,8 @@ function OnInputText(text)
     name = (name or ""):gsub("^/?[Gg][Oo][Tt][Oo]%s*", ""):gsub("^/%s*", "")
     if SetTarget(name, pos or t) and AutoEngagePaste and not AP.active then APEngage() end
   elseif lo == "help" or lo == "?" then PrintHelp()
-  elseif lo == "ap" then if AP.active then APDisengage("chat") else APEngage() end
-  elseif lo == "ap on" or lo == "go" then APEngage()
+  elseif lo == "ap" then if AP.active then APDisengage("chat") else APEngage(true) end
+  elseif lo == "ap on" or lo == "go" then APEngage(true)
   elseif lo == "ap off" or lo == "stop" then
     if AP.active then APDisengage("chat") else Msg("AP is already off") end
   elseif lo == "clear" then ClearTarget()
@@ -2350,7 +2721,7 @@ end
 
 -- ── HUD (AR overlay) ──────────────────────────────────────────────
 local PHASE_COL = { OFF="#7f8c99", ALIGN="#ffc24b", BURN="ACC", CRUISE="#5be37a",
-  BRAKING="#ff9a3c", STOPPING="#ff9a3c", OBSTACLE="#ff3b3b", DESCENT="ACC", ["KILL DRIFT"]="#ffc24b", CORRECT="#ffc24b", ARRIVED="#5be37a" }
+  BRAKING="#ff9a3c", STOPPING="#ff9a3c", OBSTACLE="#ff3b3b", DESCENT="ACC", LIFT="ACC", ["LINE UP"]="#ffc24b", CLIMB="ACC", ORBIT="ACC", ["KILL DRIFT"]="#ffc24b", CORRECT="#ffc24b", ARRIVED="#5be37a" }
 
 -- ── Fighter-style attitude HUD (Alt+6 / "fhud") ───────────────────
 -- Centre-screen SVG: pitch ladder + horizon, roll scale, fixed ship
@@ -2570,7 +2941,7 @@ function DrawHUD()
       FormatDist(Threat.dist), Threat.t, FormatDist(Threat.miss), Threat.est and ' (est)' or ''))
   end
   -- Line 1: key hints only.
-  add('<div class="strip"><span class="keys">Alt+ 1 AP · 2 clear · 3 hide · 4 mode · 5 park · 6 HUD · Ctrl+Alt brake lock · G hover/land</span></div>')
+  add('<div class="strip"><span class="keys">Alt+ 1 AP · 2 clear · 3 hide · 4 mode · 5 park · 6 HUD · Ctrl+Alt brake lock · G hover/land</span><span class="keys">v'..VERSION..' · build '..esc(BUILD)..'</span></div>')
   -- Line 2: latest message on the left, warp (only with a warp drive) on
   -- the right. Hidden when there's neither.
   local warpHtml = ''
@@ -2609,7 +2980,14 @@ function DrawHUD()
   add('<div class="p"><div class="hd"><span>FLIGHT</span><span>'..badges..'</span></div>')
   add('<div class="big">'..string.format("%.0f", speed*3.6)..' <small>/ '..string.format("%.0f", cap*3.6)..' km/h</small></div>')
   -- Throttle / cruise (replaces DU's seat widget, which is hidden)
-  if acm:getAxisCommandType(axisCommandId.longitudinal) == axisCommandType.byTargetSpeed then
+  if AP.active then
+    -- AP flying: show what the AP is commanding (the seat throttle sits at
+    -- 0 meanwhile). Carl: "if the throttle could show what it's doing".
+    local thr = MaxThrustN > 0 and clamp((AP.accel or 0) * mass / MaxThrustN, 0, 1) or 0
+    local br = AP.brake or 0
+    row("THROTTLE (AP)", string.format("%d%%", math.floor(thr * 100 + 0.5))..
+      (br > 0.01 and string.format(" · brake %d%%", math.floor(br * 100 + 0.5)) or ""))
+  elseif acm:getAxisCommandType(axisCommandId.longitudinal) == axisCommandType.byTargetSpeed then
     row("CRUISE", string.format("%.0f km/h", acm:getTargetSpeed(axisCommandId.longitudinal)))
   else
     local okT, t = pcall(unit.getThrottle)
@@ -2676,8 +3054,8 @@ function DrawHUD()
       if AP.predMiss then
         row("PREDICTED MISS · AIM SHIFT", FormatDist(AP.predMiss).." · "..FormatDist((AP.aimOff or vec3()):len()))
       end
-      if #AP.legs > 1 then row("LEG", AP.leg.." of "..#AP.legs) end
-      if AP.total > 0 then
+      if AP.legs and #AP.legs > 1 then row("LEG", AP.leg.." of "..#AP.legs) end
+      if (AP.total or 0) > 0 and not AP.takeoff then
         local pct = clamp(1 - mmax(remaining, 0) / mmax(AP.total - StopDist(), 1), 0, 1)
         add('<div class="bar"><i style="width:'..string.format("%.1f", pct*100)..'%"></i></div>')
       end
@@ -2786,7 +3164,7 @@ system.showScreen(true)
 if HideDUWidget then pcall(unit.hideWidget) end   -- the HUD's FLIGHT panel replaces it
 unit.setTimer("hud", 0.05)   -- 20 Hz so the attitude HUD moves smoothly
 unit.setTimer("nav", 0.5)
-system.print("[HELM] Helmsman v"..VERSION..
+system.print("[HELM] Helmsman v"..VERSION.." (build "..BUILD..")"..
   "  |  atlas="..(Atlas and (AtlasName.." ("..#Bodies.." bodies)") or "MISSING")..
   "  |  databank="..(NavDB and ({ hud = "Navigator HUD bank", main = "WRONG BANK",
       mine = "OK (no Navigator yet)", blank = "OK (no Navigator yet)", other = "OK (other data)" })[BankKind(NavDB)] or "none")..
