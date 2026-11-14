@@ -10,18 +10,29 @@ A Dual Universe seat flight script with a space autopilot. It is the companion t
 - **Navigator link**: NAVIGATE in Navigator and the target appears here. With Navigator's AUTO FLY on, the AP engages by itself and route stops chain.
 - AR overlay HUD showing target, distance, ETA, speed, braking distance, and AP phase.
 
-> Surface targets: the AP flies to a hold point in space straight above the spot (outside the atmosphere *and* above the highest terrain, which matters for Thades) and stops right on it, not `StopDistance` short. With **AutoLand** on (default) it then **descends straight down the down line**: gravity does the accelerating, the brakes keep the speed under 85% of the ship's atmospheric burn speed and stop the fast part `DescentHeight` (100 m) above the spot (or above the atlas's highest terrain when the location's altitude is 0, as map picks often are). The normal landing then sets you down. Brake at any time stops it; Alt+1 above the spot carries on down. AutoLand off: it stops above and waits for G. Picking a body's centre on the map gives the side facing you (no auto-descent: there is no real spot).
+> Surface targets: the AP flies to a hold point in space straight above the spot (outside the atmosphere *and* above the highest terrain, which matters for Thades) and stops right on it, not `StopDistance` short. With **AutoLand** on (default) it then **descends straight down the down line**, steering back over the spot all the way down: it tilts its belly toward where it needs to go, by pitch or roll, up to 20° (a falling ship slides toward its low side; the idea is from SagaHUD by Sagacious), and can also turn to face the spot and give the main engines small pushes: gravity does the accelerating, the brakes keep the speed under 85% of the ship's atmospheric burn speed and stop the fast part `DescentHeight` (100 m) above the spot (or above the atlas's highest terrain when the location's altitude is 0, as map picks often are). Below that, if the ship has hovers or vertical boosters, it keeps coming down slowly (when the spot's altitude is unknown, no faster than the normal landing would), still holding over the spot (turning to face it if needed), until the hovers see the ground; then the normal landing sets you down and reports how far from the mark it landed. Brake at any time stops it; Alt+1 above the spot carries on down. AutoLand off: it stops above and waits for G. Picking a body's centre on the map gives the side facing you (no auto-descent: there is no real spot).
 
 ## Take-off (Alt+1 on the ground or in atmosphere)
 
 Set a target, then press **Alt+1** (or type `ap` / `go`) while landed or flying in atmosphere:
 
-1. **LIFT**: hovers / vertical boosters lift the ship to hover height, as G does.
-2. **LINE UP**: brakes on, the ship turns level toward the destination. The radar checks that no static construct stands in the climb path; if one does, the take-off stops and says which. Fly clear by hand, or press Alt+1 again within 20 s to go anyway. (Ships only give the radar a distance, so they can't be checked.)
-3. **CLIMB**: main engines only. The nose comes up **only as forward speed builds** (level below 54 km/h, full climb angle from 180 km/h) and comes back down if the speed drops, so the ship is never steep and slow. The full angle comes from thrust-to-weight (shallower for heavy ships), up to `MaxClimbAngle`; if the ship isn't actually climbing it raises the angle step by step to that limit, and tells you if it still can't. Speed stays under 85% of the burn speed. Wings stay level.
+1. **LIFT**: hovers / vertical boosters lift the ship to hover height, as G does. If they can't get it there (it stops rising below it, or 12 s pass), the take-off stops with a NOT ENOUGH LIFT popup and the ship keeps hovering where it is: a ship that can't reach its hover height can't be trusted to clear rough ground.
+2. **LINE UP**: brakes on, the ship turns level toward the destination. The radar collision warning keeps watching during the climb (brake to stop if anything is in the way).
+3. **CLIMB**: main engines only. The nose comes up **only as forward speed builds** (level below 29 km/h, full climb angle from 119 km/h) and comes back down if the speed drops, so the ship is never steep and slow. The full angle comes from thrust-to-weight (shallower for heavy ships), up to `MaxClimbAngle`; if the ship isn't actually climbing it raises the angle step by step to that limit, but only while that doesn't cost forward speed (in thin air a steeper nose just bleeds speed and lift). If it still can't climb, an atmosphere trip cruises at the height it reached ("Can't climb higher — cruising at X m"); a trip to space shows a CAN'T REACH SPACE popup so you can take over. Speed stays under 85% of the burn speed. Turns are flown like a plane (SAGA-style): heading changes round the vertical only, and the bank is twice the angle between the ship's track and the target, up to 45° (faded in from ~140 to ~290 km/h, less if the ship is sinking). A new target well to the side or behind (more than 30° off, over 1 km away) starts a **TURN**: the ship keeps flying speed (brakes only down to what keeps the turn circle inside the distance, never below ~200 km/h), banks fully to one side and lets the nose lead its track by 40° so wings and engines carry it round, holding height with the cruise's own control. If it stops coming round (the target angle doesn't close by 15° within 20 s, or 30 s at the start while it slows to turn speed), or drifts further away than 3 km or half the distance it started the turn at, whichever is more, the AP turns off and the ship lands where it is, with a CAN'T TURN — LANDING popup: a flat turn on the spot would stall a ship that isn't hovering. Alt+1 once down carries on to the target.
 4. Once out of the atmosphere (1 km above it), the normal space AP takes over: route around planets, cruise, stop. A surface destination then descends and lands as above.
 
 Only your own Alt+1 / `ap` / `go` starts a take-off. Navigator's Auto Fly or a pasted `::pos` while parked just sets the target and says "Alt+1 to take off". Brake stops the take-off at any moment.
+
+### Atmosphere trips (same planet, default)
+
+When the destination is a surface spot on the **same planet** you're on or flying over, and that planet has an atmosphere, the ship stays in the air by default (`PlanetTrips = "atmo"`). It doesn't go to space, however far the spot is:
+
+1. Take-off as above (LIFT, LINE UP, CLIMB).
+2. The climb runs at full throttle, as steep as the ship can manage (up to `AtmoClimbAngle`, 45°), flattening as it speeds up so it can level off in time, and rounds off smoothly into **CRUISE** at `AtmoCruiseHeight` (3,000 m by default; raised over the highest terrain and tallest allowed buildings, kept under the atmosphere top), heading for the spot, under the burn speed. Short hops climb less: about 30% of the distance (a 1 km hop goes about 300 m up).
+3. **Gradual approach**: like SAGA and Arch, it starts slowing well before the spot (about 30% of the brakes, at most 0.8 g), still holding height and heading, and eases in over the last stretch, so it ends almost stopped right over the spot. **SLOWING** (full brakes) is only a backup if it's well over that curve. Down-facing engines (not hovers) hold the height while it's slow, but atmo engines lose push as the air thins, faster than the density itself (measured: about push × density²; DU only reports the sea-level figure). If they can't hold the ship at the cruise height, it comes down before slowing, while still fast, to where they can (never below 350 m over the descent start). If they still turn out too weak, it lets the ship sink rather than holding the brakes on. The `thrust` command shows the up engines' push here and the air density they need.
+4. The straight-down descent and landing, as for any surface spot.
+
+`PlanetTrips = "orbit"` climbs out instead and uses the space route or orbit hop below. `"auto"` stays in the air up to `AtmoHopMax` km and goes via orbit beyond it.
 
 ### Orbit hop (same planet, far side)
 
@@ -92,16 +103,18 @@ Chat commands like `speed` and `stopdist` change the setting for the current ses
 | G | Lift off to hover height / land (gear, hovers and vertical boosters) |
 | Brake, throttle, pitch/yaw, stop engines | Disengages the AP (you take over) |
 
-Lua chat: `::pos{...}`, `goto ::pos{...}`, `ap`, `ap on`, `ap off`/`stop`, `clear`, `hud`, `speed N` (km/h cap, 0 = max), `stopdist N`, `navinfo on/off`, `brakes` / `brakes reset` (measured braking per speed band), `ahead N` (test target in empty space N su off the nose), `radar` (contacts and what DU reports about them), `target`, `help`.
+Lua chat: `::pos{...}`, `goto ::pos{...}`, `ap`, `ap on`, `ap off`/`stop`, `clear`, `hud`, `speed N` (km/h cap, 0 = max), `stopdist N`, `navinfo on/off`, `brakes` / `brakes reset` (measured braking per speed band; learned and saved per pilot, so someone borrowing the ship starts fresh and doesn't change yours), `ahead N` (test target in empty space N su off the nose), `radar` (contacts and what DU reports about them), `target`, `help`.
 
 ## Flight modes
 
 - **Flight** (default): throttle drives the ship forward. Vertical and lateral thrusters only fire while you press their keys. A parked ship makes no thrust at all until you press G.
-- **Maneuver**: for docking, parking and slow precise movement. Throttle, strafe and Space/C each ask for a *speed* in that direction, as a fraction of `ManeuverSpeed`. Thrusters facing every direction work together to hit it. With nothing pressed the ship holds still, and the up-facing thrusters carry its weight once you've lifted off with G.
+- **Maneuver**: for docking, parking and slow precise movement. Throttle, strafe and Space/C each ask for a *speed* in that direction, as a fraction of `ManeuverSpeed`. Thrusters facing every direction work together to hit it. With nothing pressed the ship holds still, and the down-facing thrusters (pushing up) carry its weight once you've lifted off with G.
 
 The script checks how much thrust the ship has in each of the 6 directions. That's printed at startup and with the `thrust` command. In Maneuver mode the HUD shows `F B L R U D`, with any missing direction in red, and warns if the up thrust can't carry the ship's weight.
 
 ## Settings (Edit Lua Parameters)
+
+The HUD look (theme, scale, position, opacity), Flight HUD / nav info / AutoLevel, LandSafety and the fuel talents are saved on the databank, so a new paste keeps them. A parameter left at its default uses the saved value. DU's parameter menu always shows the script's defaults, so type `settings` in Lua chat to see what is actually saved and in use. Autopilot and flight settings are not saved and come from this list.
 
 | Parameter | Default | Meaning |
 |---|---|---|
@@ -114,13 +127,17 @@ The script checks how much thrust the ship has in each of the 6 directions. That
 | AutoEngagePaste | true | Pasting a ::pos{} engages immediately |
 | StartMode | 1 | 1 = Flight, 2 = Maneuver when you sit down |
 | ManeuverSpeed | 100 | Maneuver mode top speed, km/h |
-| HoverHeight | 4 | Hover height (m) after pressing G |
+| HoverHeight | 10 | Hover height (m) after pressing G |
 | AutoLand | true | Surface targets: descend straight down from the hold point and land. Off = stop above and wait for G |
+| PlanetTrips | atmo | Surface spot on the same atmosphere planet: `atmo` = fly there in the air (any distance), `orbit` = via space / orbit hop, `auto` = air up to AtmoHopMax, orbit beyond |
+| AtmoHopMax | 100 | `auto` only: furthest trip (km) that stays in the atmosphere |
+| AtmoClimbAngle | 45 | *Optional, leave as is.* Atmosphere trips: steepest climb angle (degrees). The AP flattens the climb by itself as the speed builds, so it levels off at the cruise height (sim: within ~80 m at 45°). Lower it only for a gentler climb |
+| AtmoCruiseHeight | 3000 | Atmosphere trips: cruise altitude (m above sea level), raised over the highest terrain / tallest allowed buildings, kept under the atmosphere top |
 | OrbitHop | true | Far side of the same atmosphere planet: low orbit at orbital speed instead of the corner route. Moons always use the normal full-speed route |
-| MaxClimbAngle | 45 | Take-off: steepest nose-up angle (10-60°). Heavy ships use less; raised automatically up to this if the ship isn't climbing |
-| DescentHeight | 100 | AutoLand: metres above the spot where the fast descent hands over to the normal landing (min 30) |
+| MaxClimbAngle | 45 | *Optional, leave as is: the AP picks the angle itself; this is the upper limit.* Take-off: steepest nose-up angle (10-60°). Heavy ships use less; raised automatically up to this if the ship isn't climbing |
+| DescentHeight | 100 | AutoLand: metres above the spot where the fast descent ends; below it the ship comes down slowly, still holding over the spot, until the hovers see the ground (min 30) |
 | GLandsDirect | false | On: G while flying starts landing in one press. Off: G goes to hover first, then G again lands |
-| LandSpeed | 150 | Fastest landing descent, km/h. Reached while the ship is above the highest terrain in the atlas (plus 300 m), or when the hovers/boosters can see far enough to stop. `landsafety N` sets how hard it plans to brake |
+| LandSpeed | 0 | Fastest landing descent, km/h. **0 = automatic**: as fast as the brakes + hovers/boosters can still stop within what they can see (weight and cargo included, brakes as measured on your own stops), up to 500 km/h and never over the burn speed. A number = your own limit. When you sit down (and with `thrust`) a line in chat says what the ship can stop from; it warns if your number is only usable high up, and if the ship can barely hold its own weight. `landsafety N` sets how hard it plans to brake |
 | TouchdownSpeed | 15 | Landing speed (km/h) for the last 2 m before touchdown, or the whole landing if no hover/booster is linked. Higher is quicker but lands harder |
 | CollisionWarn | true | Radar collision warning on the HUD (warning only) |
 | CollisionStop | true | AP stops short of a radar contact on its path and hands back to you. Manual flight is never taken over |
@@ -130,8 +147,10 @@ The script checks how much thrust the ship has in each of the 6 directions. That
 | NavInfo | true | AUTOPILOT panel (target, ETA, brake distance). Turn it off if you'd rather watch Navigator's screen; the AP phase then shows as a badge in FLIGHT. Live: `navinfo on/off`, saved |
 | FlightHudScale | 0.75 | Size of the fighter-style centre HUD |
 | FlightHud | true | Centre attitude HUD: pitch ladder, roll scale, flight path marker, AP target marker, speed / altitude. Alt+6 or `fhud` toggles; saved |
+| BurnProtect | true | Hand flying in atmosphere: engine push fades out near the burn speed, so you level off just under it (BURN LIMIT tag); the brakes only act if you go over it, e.g. diving. Steering and your throttle setting are never touched |
 | AutoLevel | true | Auto-levelling (only while hovering/landing, or in atmosphere). A LEVEL tag shows whenever it's acting. `autolevel on/off`; saved |
 | HideDUWidget | true | Hide DU's own seat panel; the HUD's FLIGHT panel shows throttle / cruise instead |
+| HideBuildHelper | true | Hide DU's BUILD HELPER bar at the top of the screen while seated; it comes back when you get up |
 | AccentR/G/B | 0/200/255 | HUD accent colour |
 
 ## How the autopilot flies
@@ -147,3 +166,7 @@ Before engaging, it checks the straight line against every planet and moon in DU
 | `nav_ap_dest` | Navigator | `NAME\|::pos{...}`. Read, then cleared, by Helmsman |
 | `autofly` | Navigator | `1` = engage automatically on a new destination |
 | `sf_target` | Helmsman | Current target, restored when you sit back down |
+
+## Credits
+
+- **Sagacious (SagaHUD)**: keeping the ship steered over the destination through the whole descent is the idea that makes SAGA land on the spot. Sagacious released the SAGA source for others to build on; Helmsman uses the idea with its own code (nose kept level, no tilting).
