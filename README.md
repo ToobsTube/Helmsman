@@ -30,7 +30,7 @@ When the destination is a surface spot on the **same planet** you're on or flyin
 1. Take-off as above (LIFT, LINE UP, CLIMB).
 2. The climb runs at full throttle, as steep as the ship can manage (up to `AtmoClimbAngle`, 45°), flattening as it speeds up so it can level off in time, and rounds off smoothly into **CRUISE** at `AtmoCruiseHeight` (3,000 m by default; raised over the highest terrain and tallest allowed buildings, kept under the atmosphere top), heading for the spot, under the burn speed. Short hops climb less: about 30% of the distance (a 1 km hop goes about 300 m up).
 3. **Gradual approach**: like SAGA and Arch, it starts slowing well before the spot (about 30% of the brakes, at most 0.8 g), still holding height and heading, and eases in over the last stretch, so it ends almost stopped right over the spot. **SLOWING** (full brakes) is only a backup if it's well over that curve. Down-facing engines (not hovers) hold the height while it's slow, but atmo engines lose push as the air thins, faster than the density itself (measured: about push × density²; DU only reports the sea-level figure). If they can't hold the ship at the cruise height, it comes down before slowing, while still fast, to where they can (never below 350 m over the descent start). If they still turn out too weak, it lets the ship sink rather than holding the brakes on. The `thrust` command shows the up engines' push here and the air density they need.
-4. The straight-down descent and landing, as for any surface spot.
+4. The straight-down descent and landing, as for any surface spot. A short hop that ends lower than where the fast descent would start goes straight to the descent's slow final stretch (belly tilt and position hold over the mark) until the hovers see the ground, the same as long trips.
 
 `PlanetTrips = "orbit"` climbs out instead and uses the space route or orbit hop below. `"auto"` stays in the air up to `AtmoHopMax` km and goes via orbit beyond it.
 
@@ -52,23 +52,37 @@ This produces both install formats from the same source:
 ## Install
 
 ### Option A: paste (recommended, and the one to use for DRM ships)
-1. Link the **core unit** to the seat or remote controller. Optionally also link the **databank shared with Navigator** and the **anti-grav generator**. Any slot, any order works, because the script identifies each element by class at startup.
+1. Link the **core unit** to the seat or remote controller. Optionally also link: the **databank shared with Navigator**, the **anti-grav generator**, **one hover or vertical booster** (lets landings read the distance to the ground), **radar(s)**, the **warp drive**, and any **manual switch** for cabin automation. Any slot, any order works, because the script identifies each element by class at startup.
 2. Open `Helmsman_v0.1.txt`, copy everything, then right-click the seat → *Advanced* → *Paste Lua configuration from clipboard*.
 
 ### Option B: autoconfigure
 1. Copy `Helmsman_v0.1.conf` to `...\Dual Universe\Game\data\lua\autoconf\custom\`
-2. Right-click the seat → *Advanced* → *Run custom autoconfigure* → **Helmsman v0.1**. This links the core and anti-grav. Link the Navigator databank yourself afterwards if you use one.
+2. Right-click the seat → *Advanced* → *Run custom autoconfigure* → **Helmsman v0.1**.
+
+   **Linked automatically:** core, anti-grav generator, vertical boosters, hovers, warp drive.
+
+   **Link by hand afterwards** (only the ones you use):
+   - the **databank shared with Navigator**
+   - **radar(s)**, atmo and/or space (collision warning, AP obstacle stop)
+   - **manual switch(es)** for cabin automation (on while seated, off when you get up)
+
+   Fuel tanks need no links.
 
 Either way, sit down and check the Lua console:
-`[HELM] Helmsman v0.1.0 | atlas=atlas (N bodies) | databank=Navigator HUD bank | antigrav=OK | ground sensors=1`
+`[HELM] Helmsman v0.1.0 | atlas=atlas (N bodies) | databank=Navigator HUD bank | antigrav=OK | ground sensors=1 | radars=1 | switches=1 | warp=OK`
 
-## Fuel and radar (optional links)
+(`switches=` only appears when a switch is linked.)
+
+## Optional links: fuel, radar, switches, AGG, warp
 
 - **Fuel (no links needed):** every fuel tank on the construct is read through the core. The HUD shows a row per fuel type (ATMO / SPACE / ROCKET) with litres left, %, and a bar: green above 50%, amber from 20 to 50%, red below 20%. Litres come from each tank's weight; capacity comes from its size and tier, using DU's standard values. Set the tank owner's fuel talents once with `fueltalents H O C` (handling, fuel tank optimization, container optimization, each 0-5). The values are saved to the databank and are also parameters. A `~` before the % means a tank holds more than those talents allow, so they're set too low. `fuel` lists every tank, to compare with DU's own refuel-tool readout.
 - **Radar (link manually):** link an atmo radar, a space radar, or both, in any slot. DU's own radar widget is shown for whichever one works where you are, switching automatically when you enter or leave atmosphere. The HUD shows the contact count.
 - **Collision warning (needs a radar):** a contact on or near your path shows as a strip above the HUD: amber `CONTACT ON PATH` (name, size, distance, seconds to it, how far off you would pass), red `COLLISION — BRAKE NOW` when the brakes alone can no longer stop you short of it. It never takes over a ship you are flying yourself. Contacts the autopilot will stop short of anyway (such as the station you are flying to) are ignored.
 - **Autopilot obstacle stop (CollisionStop, on by default):** when the AP is flying and a contact is on its path, it plans a stop about 50 m before the warning zone (phase OBSTACLE, red), holds the brakes and hands back to you with the name and distance. Fly round it, or press Alt+1 to carry on anyway (that contact is then ignored for the trip). If the contact moves off the path while the AP is still well short of it, the AP continues by itself. It never steers round anything. When DU only gives a distance, the contact is assumed to stand still and the result is marked `(est)`. `radar` in Lua chat lists the contacts. Turn off with the CollisionWarn parameter.
-
+- **Manual switches (link manually):** any manual switch linked to the seat or remote turns **on when you sit down and off when you get up**, as in ArchHUD. Ships use it for cabin automation (seat → switch → doors, force fields, lights). It never touches the anti-grav generator.
+- **Anti-grav generator (auto-linked by the `.conf`; link it yourself for the paste install):** Alt+G (DU's anti-gravity key) or `agg on` / `agg off` in Lua chat turns it on and off. If another program such as Copilot or Gemini takes Alt+G, rebind the anti-gravity key in DU's controls or use the chat commands. In Lua chat, `agg 2500` sets the hover height (metres, 1,000 or more), `agg here` sets it to your current altitude, and `agg` on its own prints the status. The height is stored on the AGG itself, so it survives getting up, restarts and reinstalls. The SYSTEMS panel shows an AGG row: grey when off, amber while the lift creeps to a new height (with a time estimate), green when holding, red `no pulsors linked` when the generator reports no pulsors (it then lifts nothing, whatever the heights say). A note under it says how far you are above or below the lift. The AGG holds the ship at the **lift point**, not at the height you set: until the row turns green it pulls you toward where the lift is now. So set the height first (on the ground is fine), wait for green, then fly up to it and let go. Helmsman never turns the AGG off: getting up, stopping the seat and the autopilot leave it as it is. Only Alt+G or `agg off` turns it off.
+- **AGG trips (autopilot):** with the AGG on (and pulsors linked), sending the AP to a spot on the planet you're on makes it **stay in the air**: the destination becomes the point over the spot at the AGG height (above sea level, as the AGG works), so a Navigator or pasted ground spot works as is. If the AGG height clears the planet's highest ground by 100 m, the AP flies the whole trip at the AGG height and the AGG carries the weight. If not, it cruises at the normal safe height and comes down to the AGG height near the spot. It stops over the spot with the brakes held and the AGG holding; it never lands. A spot saved in the air at the AGG height (within 30 m below to 25 m above it) counts as an AGG trip too: it flies there at that height and holds. A normal trip (landing) is flown instead when the spot is higher than the AGG height, or for a map pick (ground height unknown) when the AGG height is below the highest ground; the chat says why. If it can't bank round toward the target, it stops in the air instead of landing. Trips from space or another planet arrive the normal way.
+- **Parking heading:** add `|hdg=N` after a `::pos{}` (pasted, or from Navigator) and the ship parks facing that way: N is a compass heading in degrees, 0 = north (toward the planet's pole, the axis `::pos` latitude uses), 90 = east. A landing holds the heading all the way down, so it has turned while still high up, and doesn't go below the fast descent's end (DescentHeight over the spot) until it faces it. An AGG trip, or a landing without the descent, turns in place over the spot on the brakes before holding or setting down. It gives up after 60 s and says so. Chat: `hdg` shows which way the nose faces; `hdg N`, `hdg here` or `hdg off` set the current target's parking heading.
 - **Warp drive (auto-linked by the `.conf`; link it yourself for the paste install):** pick the destination on the in-game map as usual. A single WARP line under the key hints shows the drive's status (READY / cooling down / planet too close / not enough cells / no destination…), the destination and distance, and warp cells needed / aboard (red if not enough). Jump with the game's own warp key (Alt+J) as usual; the script only displays warp info. While DU is warping, the script stops all engine and brake commands so it never fights the jump. If the AP was flying when the warp started, it resumes by itself about a second after you drop out (press brake during the warp to cancel that).
 
 The startup lines report `radars=N`, `warp=OK|none` and `N fuel tanks read`.
@@ -163,7 +177,8 @@ Before engaging, it checks the straight line against every planet and moon in DU
 
 | Key | Written by | Meaning |
 |---|---|---|
-| `nav_ap_dest` | Navigator | `NAME\|::pos{...}`. Read, then cleared, by Helmsman |
+| `nav_ap_dest` | Navigator | `NAME\|::pos{...}`, optionally `\|hdg=N` on the end (parking heading). Read, then cleared, by Helmsman |
+| `nav_print` | Navigator | `NAME\|::pos{...}` from PRINT COORDS. Helmsman prints it to Lua chat (`[NAV] NAME`, then the `::pos{}` on its own line) and clears it. Never used as a destination. Lets a switch-started Navigator PB, which can't print, still show coordinates |
 | `autofly` | Navigator | `1` = engage automatically on a new destination |
 | `sf_target` | Helmsman | Current target, restored when you sit back down |
 

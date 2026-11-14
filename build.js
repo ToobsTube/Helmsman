@@ -44,6 +44,8 @@ const CONF_SLOTS = [
   ['radar',    { class: 'RadarPVPUnit', select: 'manual' }],
   // Warp drive: auto-linked like the default flight script / Arch.
   ['warpdrive', { class: 'WarpDriveUnit' }],
+  // Manual: seat-linked switches for cabin automation (ON while seated).
+  ['switch',   { class: 'ManualSwitchUnit', select: 'manual' }],
 ];
 
 // ── JSON slots ── only system slots are named; link slots 0-9 stay generic

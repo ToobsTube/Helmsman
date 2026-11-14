@@ -118,6 +118,7 @@ local foundCore, foundAgg, banks = nil, nil, {}
 GroundEngines = {}   -- linked vertical boosters / hovers: used only to read ground distance
 Radars        = {}   -- linked radars (atmo and/or space)
 WarpDrive     = nil  -- linked warp drive (destination is chosen on the in-game map)
+Switches      = {}   -- linked manual switches: ON while seated, OFF on leaving (like ArchHUD)
 -- (Fuel tanks need no links — every tank is read through the core.)
 -- The same element can appear under two names (e.g. .conf name + slotN).
 local seen = {}
@@ -129,7 +130,7 @@ end
 for _, e in pairs({core, navdb, navdb_1, navdb_2, antigrav, antigrav_1,
                    vBooster, vBooster_1, vBooster_2, vBooster_3, vBooster_4,
                    hover, hover_1, hover_2, hover_3, hover_4,
-                   radar, radar_1, radar_2, warpdrive, warpdrive_1,
+                   radar, radar_1, radar_2, warpdrive, warpdrive_1, switch, switch_1, switch_2,
                    slot1, slot2, slot3, slot4, slot5, slot6, slot7, slot8, slot9, slot10,
                    slot11, slot12, slot13, slot14, slot15, slot16, slot17, slot18, slot19, slot20,
                    slot21, slot22, slot23, slot24, slot25}) do
@@ -140,8 +141,14 @@ for _, e in pairs({core, navdb, navdb_1, navdb_2, antigrav, antigrav_1,
   elseif c:find("warpdrive") then WarpDrive = WarpDrive or e
   elseif c:find("verticalbooster") or c:find("hovercraft") or c:find("hover") then addOnce(GroundEngines, e)
   elseif c:find("databank") then addOnce(banks, e)
+  elseif c:find("manualswitch") then addOnce(Switches, e)
   end
 end
+-- Seat-linked manual switches go ON when you sit down and OFF when you get
+-- up (ArchHUD does the same). Ships use it for cabin automation: Carl's
+-- Hammer Crest has seat -> switch -> board for doors, force fields and
+-- lights; the seat's own script used to flip that switch.
+for _, sw in ipairs(Switches) do pcall(sw.activate) end
 -- Which databank is which? Navigator's ship PB has TWO banks and writes
 -- "autofly" to both, so that key proves nothing. Use keys that only
 -- exist on one of them (key-list membership — the nav_*_dest keys stay
@@ -157,7 +164,7 @@ local function keySet(d)
 end
 function BankKind(d)
   local s = keySet(d)
-  if s.nav_ap_dest or s.nav_arch_dest or s.nav_saga_dest or s.SavedLocations or s.SagaConf or s.SagaRoutes then return "hud" end
+  if s.nav_ap_dest or s.nav_print or s.nav_arch_dest or s.nav_saga_dest or s.SavedLocations or s.SagaConf or s.SagaRoutes then return "hud" end
   if s.personal_wps or s.personal_routes then return "main" end
   if s.sf_target then return "mine" end
   return next(s) and "other" or "blank"
@@ -864,9 +871,17 @@ function UpdateThreats()
     if capGain then gain = mmin(gain, capGain) end
     return gain - vert > Rp + 10
   end
+  -- Ships docked to us (and the one we're docked to) travel with us:
+  -- never a threat (Carl, 1114: the carrier's docked AGG elevator was
+  -- reported as a ship below).
+  local docked = {}
+  local okD, dl = pcall(C.getDockedConstructs)
+  if okD and type(dl) == "table" then for _, did in ipairs(dl) do docked[did] = true end end
+  local okP, par = pcall(C.getParent)
+  if okP and par and par ~= 0 then docked[par] = true end
   for i, id in ipairs(ids) do
     if i > 60 then break end                    -- CPU budget
-    local d = rcall(r, "getConstructDistance", id)
+    local d = not docked[id] and rcall(r, "getConstructDistance", id)
     if type(d) == "number" then
       -- Rp = physical size (its core class + ~15 m for us).
       local Rp = (CORE_R[rcall(r, "getConstructCoreSize", id) or ""] or 64) + 15
@@ -1396,7 +1411,8 @@ end
 -- ── Target handling ───────────────────────────────────────────────
 function SaveTarget()
   if not NavDB then return end
-  pcall(NavDB.setStringValue, "sf_target", AP.target and (AP.name.."|"..AP.posStr) or "")
+  pcall(NavDB.setStringValue, "sf_target", AP.target and (AP.name.."|"..AP.posStr..
+    (AP.hdg and string.format("|hdg=%.1f", AP.hdg) or "")) or "")
 end
 
 -- Surface targets become a hold point straight ABOVE the spot. Stopping
@@ -1410,8 +1426,39 @@ function StopDist() return AP.surface and 0 or StopDistance end
 -- count as arrived within 25 m; the brakes then stop the ship there.
 function ArriveTol() return AP.surface and 25 or 0 end
 
-function SetTarget(name, posStr)
+-- Parking heading on a destination: "...::pos{...}|hdg=135" (compass
+-- degrees: 0 = north = toward the planet's pole (+Z, the axis ::pos
+-- latitude uses), 90 = east). Navigator adds it to nav_ap_dest.
+function ParseHdg(s)
+  local h = s and tonumber(s:match("hdg%s*=%s*(%-?[%d%.]+)"))
+  return h and (h % 360) or nil
+end
+
+-- Level direction for compass heading hdg at "up" upW (nil near a pole).
+function HeadingVec(hdg, upW)
+  local Z = vec3(0, 0, 1)
+  local n = Z - upW * Z:dot(upW)
+  if n:len() < 0.05 then return nil end
+  n = n / n:len()
+  local e = n:cross(upW)                     -- east (toward +longitude)
+  local a = math.rad(hdg)
+  return n * math.cos(a) + e * math.sin(a)
+end
+
+-- Compass heading (0-360) of the ship's nose, nil near a pole / nose up.
+function HeadingOf(fwd, upW)
+  local Z = vec3(0, 0, 1)
+  local n = Z - upW * Z:dot(upW)
+  local f = fwd - upW * fwd:dot(upW)
+  if n:len() < 0.05 or f:len() < 0.05 then return nil end
+  n, f = n / n:len(), f / f:len()
+  local e = n:cross(upW)
+  return math.deg(math.atan(f:dot(e), f:dot(n))) % 360
+end
+
+function SetTarget(name, posStr, hdg)
   local descentR
+  local aggPlan
   local p, err = ParsePos(posStr)
   if not p then Msg("Bad location: "..err) return false end
   local note
@@ -1454,23 +1501,32 @@ function SetTarget(name, posStr)
     end
     spot = p
     p = B.c + up * (B.hard + PlanetClearance)
+    -- AGG on: stay in the air at the AGG's height over the spot.
+    aggPlan = AggTripPlan(B, trustedR, mapPick ~= nil)
+    if aggPlan then note = AggTripNote(aggPlan, trustedR) end
   end
   local wasActive = AP.active
   if wasActive then APDisengage(nil) end
   AP.spotR = trustedR               -- spot height we can trust (nil = unknown)
+  AP.mapPick = mapPick ~= nil
+  AP.agg = nil                      -- AGG trip plan: decided at engage (the AGG may be switched meanwhile)
   name = (name and name:match("^%s*(.-)%s*$")) or ""
   AP.target, AP.posStr, AP.note = p, posStr:match("::pos%b{}"), note
   AP.surface, AP.surfB, AP.descentR, AP.descent = B ~= nil, B, descentR, false
   AP.spot = spot                    -- the surface spot itself (AP.target is the point above it)
+  AP.hdg = B and hdg or nil         -- parking heading (surface spots only)
+  AP.parkTurn = nil
   AP.name = name ~= "" and name or "Pasted location"
   AP.legs, AP.leg = nil, 1
   AP.lastObsId, AP.obs = nil, nil   -- new target: an old "carry on anyway" doesn't carry over
   system.setWaypoint(AP.posStr)
   SaveTarget()
-  Msg("Target: "..AP.name..(note and ("  ("..note..")") or ""))
+  Msg("Target: "..AP.name..(note and ("  ("..note..")") or "")..
+      (AP.hdg and string.format(" · parks facing %.0f°", AP.hdg) or ""))
   -- Map picks have no ground height (altitude 0): say what that means
   -- (Carl: "tell the pilot what is going on with a map pick").
-  if mapPick and AutoLand then
+  -- (not on an AGG trip: there's no descent — Carl, 1114 carrier test)
+  if mapPick and AutoLand and not aggPlan then
     system.print(string.format("[HELM] Map pick: no ground height for this spot, so the fast descent stops %s up (300 m over %s's highest terrain); %s",
       FormatDist(mapPick.top + 300 - mapPick.r), mapPick.name,
       #GroundEngines > 0 and "below that it comes down slowly, steering onto the spot, until the hovers see the ground"
@@ -1500,11 +1556,23 @@ end
 -- warp resume never lift a parked ship off by themselves.
 function APEngage(allowTakeoff)
   if not AP.target then Msg("No target — paste a ::pos{...} into Lua chat") return false end
-  AP.descent, AP.takeoff, AP.orbit = false, nil, nil
+  AP.descent, AP.takeoff, AP.orbit, AP.parkTurn = false, nil, nil, nil
+  local pos = vec3(construct.getWorldPosition())
+  -- AGG trip? Only from inside the same planet's atmosphere (a trip from
+  -- space or another planet arrives the normal way).
+  AP.agg = nil
+  if AP.surfB then
+    local B = AP.surfB
+    if NearestBody(pos) == B and (pos - B.c):len() < (B.atm or 0) then
+      local why
+      AP.agg, why = AggTripPlan(B, AP.spotR, AP.mapPick)
+      if AP.agg then AP.note = AggTripNote(AP.agg, AP.spotR)
+      elseif why then Msg("AGG on, but a normal trip: "..why) end
+    end
+  end
   -- Already above the surface spot (e.g. braked during the descent, Alt+1
   -- again): carry on down instead of refusing for being in atmosphere.
   if CanDescend() then StartDescent() return true end
-  local pos = vec3(construct.getWorldPosition())
   if (unit.getAtmosphereDensity() or 0) > 0.0001 or InsideBody(pos) then
     if not allowTakeoff then Msg("Target set — Alt+1 to take off") return false end
     return StartTakeoff()
@@ -1539,7 +1607,7 @@ function APDisengage(reason)
   if not AP.active then return end
   BrakeLearnSave()
   AP.active, AP.phase, AP.accel, AP.brake, AP.angVel = false, "OFF", 0, 0, vec3()
-  AP.descent, AP.takeoff, AP.orbit = false, nil, nil
+  AP.descent, AP.takeoff, AP.orbit, AP.parkTurn = false, nil, nil, nil
   Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
   if reason then Msg("AP off — "..reason) end
 end
@@ -1596,7 +1664,46 @@ end
 function RollLevelAV(fwd, right, up, wv)
   if mabs(fwd:dot(wv)) > 0.9 then return vec3() end
   local err = math.atan(right:dot(wv), -up:dot(wv))   -- + = right wing low
-  return fwd * -clamp(err * 1.5, -0.5, 0.5)
+  return fwd * RollRate(err, fwd)
+end
+
+-- Turn-rate softening for ships that answer the controls late. A heavy
+-- ship keeps turning after it's told to stop and swings past the wanted
+-- angle (Carl, 1114: the L-core carrier lining up turned flat past the
+-- heading twice before it settled). Each time it swings through the
+-- wanted angle while still turning fast, that axis's gain drops 30%
+-- (down to 35%) for the rest of the session — ships that settle cleanly
+-- never trigger it. axis: world axis it turns about (to read its rate).
+SoftK = { roll = 1, yaw = 1 }
+local softPrev = {}
+function SoftGain(key, err, axis, label)
+  local tN = now()
+  local p = softPrev[key]
+  -- (a real swing through, not the wanted angle jumping across)
+  if p and tN - p.t < 0.5 and (err > 0) ~= (p.e > 0) and mabs(err - p.e) < 0.1
+     and tN - (p.cut or 0) > 1.5 and SoftK[key] > 0.36 then
+    local w = mabs(vec3(construct.getWorldAngularVelocity()):dot(axis))
+    if w > 0.05 then
+      SoftK[key] = mmax(SoftK[key] * 0.7, 0.35)
+      p.cut = tN
+      system.print(string.format("[HELM] %s swung past the mark — softening the AP's %s to %d%% for this ship",
+        label, key, math.floor(SoftK[key] * 100 + 0.5)))
+    end
+  end
+  softPrev[key] = { e = err, t = tN, cut = p and p.cut }
+  return SoftK[key]
+end
+
+-- Roll rate wanted for a roll error (rad, + = right wing lower than wanted).
+function RollRate(err, fwd)
+  local k = SoftGain("roll", err, fwd, "Roll")
+  return -clamp(err * 1.5 * k, -0.5 * k, 0.5 * k)
+end
+
+-- Yaw rate (about upW) wanted for a heading error (rad, + = turn left).
+function YawRate(err, upW, gain, cap)
+  local k = SoftGain("yaw", err, upW, "Turn")
+  return clamp(err * gain * k, -cap * k, cap * k)
 end
 
 -- ── Descent: hold point above a surface spot → straight down → landing ──
@@ -1618,8 +1725,21 @@ function BurnCap()
   return 250                                   -- ~900 km/h if DU won't say
 end
 
-function CanDescend(sideTol)
+-- low: also when already BELOW the descent start (an atmosphere short hop
+-- arriving at hop height) — with hovers/boosters the descent's slow final
+-- stretch (belly tilt, position hold) brings it down onto the mark instead
+-- of the plain landing (Carl: short hops had no tilt). Only the atmo trip's
+-- arrival passes it: Alt+1 on a parked ship must never "descend".
+function CanDescend(sideTol, low)
+  if AP.agg then return false end   -- AGG trip: stays up at the AGG height
   if not (AutoLand and AP.target and AP.surfB and AP.descentR) then return false end
+  if low and #GroundEngines > 0 then
+    local B = AP.surfB
+    local up = norm(AP.target - B.c)
+    local rel = vec3(construct.getWorldPosition()) - B.c
+    if rel:dot(up) > 0 and (rel - up * rel:dot(up)):len() < (sideTol or 200)
+       and rel:len() <= AP.descentR + 20 then return true end
+  end
   local pos = vec3(construct.getWorldPosition())
   local B = AP.surfB
   local up = norm(AP.target - B.c)
@@ -1639,7 +1759,13 @@ function StartDescent()
   Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
   local B = AP.surfB
   local h = (vec3(construct.getWorldPosition()) - B.c):len() - AP.descentR
-  Msg("Descending to "..AP.name.." ("..FormatDist(h).." down) — brake to stop")
+  if h > 5 then
+    Msg("Descending to "..AP.name.." ("..FormatDist(h).." down) — brake to stop")
+  else
+    -- (short hop: already below the fast part — straight to the slow,
+    -- steered final stretch)
+    Msg("Coming down onto "..AP.name..", holding over the mark — brake to stop")
+  end
 end
 
 function APDescentStep(pos, vel, fwd, up, mass)
@@ -1688,6 +1814,30 @@ function APDescentStep(pos, vel, fwd, up, mass)
   else
     if offNow > 3 and goal < 150 then vmax = mmin(vmax, 2) end
     if offNow > 4 and goal < 15 then vmax = 0 end          -- not over it yet: hold, don't hand over
+  end
+  -- Parking heading: held all the way down (so it's done turning high
+  -- up, clear of buildings — Carl), and nothing below DescentHeight until
+  -- it faces it. Gives up after 60 s rather than hang there.
+  local D0 = AP.descentHold or {}
+  AP.descentHold = D0
+  local hv = AP.hdg and HeadingVec(AP.hdg, -dn)
+  local yawH = 0
+  if hv then
+    local flH = fwd + dn * fwd:dot(dn)
+    if flH:len() > 0.05 then
+      flH = flH / flH:len()
+      yawH = math.atan(flH:cross(hv):dot(-dn), flH:dot(hv))
+    end
+  end
+  local hdgOk = not hv or mabs(yawH) < math.rad(3)
+  if hv and not hdgOk and goal <= 5 then
+    D0.hdgT0 = D0.hdgT0 or now()
+    vmax = 0
+    if not D0.hdgMsg then D0.hdgMsg = true; Msg(string.format("Turning to face %.0f° before going lower", AP.hdg)) end
+    if now() - D0.hdgT0 > 60 then
+      Msg(string.format("Couldn't finish turning to %.0f° (%.0f° off) — landing as it is", AP.hdg, math.deg(mabs(yawH))))
+      AP.hdg, hv, hdgOk = nil, nil, true
+    end
   end
   local brake = 0
   -- Only as much brake as the fall needs: full brakes to hold height also
@@ -1778,9 +1928,13 @@ function APDescentStep(pos, vel, fwd, up, mass)
     -- (final stretch: turning allowed down to 2.5 m off — it's barely
     -- moving sideways by then, so the bearing to the spot holds still; the
     -- 8 m rule left it sinking 5 m off with the spot beside it — sim)
-    if mabs(yawErr) > math.rad(15) and offLen > (final and 2.5 or 8) then D.turning = true
+    -- (parking heading set: no turning to face the spot — the belly tilt
+    -- and brakes move it across; only if the tilt doesn't work does it
+    -- turn for the spot, and faces the heading again once over it)
+    if hv and not D.noTilt then D.turning = false
+    elseif mabs(yawErr) > math.rad(15) and offLen > (final and 2.5 or 8) then D.turning = true
     elseif mabs(yawErr) < math.rad(3) then D.turning = false end
-    if D.turning then AP.angVel = AP.angVel + upW * clamp(yawErr * 0.6, -0.15, 0.15) end
+    if D.turning then AP.angVel = AP.angVel + upW * YawRate(yawErr, upW, 0.6, 0.15) end
     -- small pushes only, and none once nearly at the wanted speed (the
     -- engines keep pushing for a moment after being told to stop)
     if mabs(yawErr) < math.rad(8) then
@@ -1796,6 +1950,9 @@ function APDescentStep(pos, vel, fwd, up, mass)
       end
     end
   end
+  if hv and not (D.steer and D.noTilt) then
+    AP.angVel = AP.angVel + (-dn) * YawRate(yawH, -dn, 0.6, 0.15)
+  end
   AP.brake, AP.accel, AP.phase = brake, accel, "DESCENT"
   AP.alignErr = math.deg(mabs(pitchAng))
   -- Hand over to the landing: fast part done (and slowed), or the ground
@@ -1809,11 +1966,12 @@ function APDescentStep(pos, vel, fwd, up, mass)
   else
     handOver = (goal <= 5 and vDown < 5 and offNow <= 4) or seesGround
   end
-  if handOver then
+  if handOver and hdgOk then
     local name = AP.name
     APDisengage(nil)
     SetHover(false, true)
-    Msg(string.format("Descent done — landing on %s (%.1f m off the mark)", name, offNow))
+    Msg(string.format("Descent done — landing on %s (%.1f m off the mark%s)", name, offNow,
+      AP.hdg and string.format(", facing %.0f°", AP.hdg) or ""))
   end
 end
 
@@ -1829,6 +1987,20 @@ end
 --            capped by MaxClimbAngle. Speed kept under 85% burn speed.
 --   then, out of the atmosphere (and above the highest terrain), the
 --   normal space AP takes over: route, cruise, stop.
+-- "Down" for levelling and the trip's up/down. NOT core.getWorldGravity():
+-- with an AGG holding the ship that reads ~0 and can point anywhere (Carl,
+-- 1114-1049: Hammer Crest AGG trip cruised upside down at 1192 m). The
+-- direction to the nearest planet's centre (atlas — nothing the AGG can
+-- touch) within 2 su of it, else DU's world vertical.
+function DownDir(pos, B)
+  B = B or NearestBody(pos)
+  if B and (pos - B.c):len() - B.r < 2 * SU then return norm(B.c - pos) end
+  local ok, v = pcall(core.getWorldVertical)
+  v = ok and v and vec3(v) or vec3()
+  if v:len() > 0.5 then return v / v:len() end
+  return nil
+end
+
 function NearestBody(pos)
   local best, bd
   for _, B in ipairs(Bodies or {}) do
@@ -1855,7 +2027,13 @@ function StartTakeoff()
   AP.takeoff = { phase = phase, t0 = now(), B = NearestBody(pos) }
   local T = AP.takeoff
   T.startR = T.B and (pos - T.B.c):len()
-  if AtmoHopWanted(pos, T.B) then
+  if AP.agg then
+    -- AGG trip: cruise at the AGG height (the AGG carries the weight all
+    -- the way) when that clears the planet's highest ground; otherwise
+    -- the normal safe cruise height, coming down to it near the spot.
+    T.atmo, T.agg = true, AP.agg
+    T.cruiseR = AP.agg.cruise and AP.agg.R or AtmoCruiseR(T.B)
+  elseif AtmoHopWanted(pos, T.B) then
     -- Short hops don't go up to the full cruise height: at most ~30% of
     -- the trip in height gain (1 km hop → ~300 m up), at least 150 m over
     -- the start and the spot. (Climbing to 3 km on a 1 km hop flew past
@@ -1874,9 +2052,19 @@ function StartTakeoff()
   if ParkHold then ParkHold = nil end
   Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
   if landed then SetHover(true) end
+  if T.agg then
+    Msg(string.format("AGG trip → %s: %s, stops over the spot at the AGG height (%.0f m) — brake to stop",
+      AP.name, T.agg.cruise and "flying at the AGG height"
+        or string.format("cruising at %.0f m (AGG height is below %s's highest ground), down to it near the end", T.cruiseR - T.B.r, T.B.name),
+      T.agg.alt))
+    if T.agg.base and mabs(T.agg.base - T.agg.alt) > 20 then
+      Msg(string.format("Note: the AGG lift is still at %.0f m, creeping to %.0f m", T.agg.base, T.agg.alt))
+    end
+  else
   Msg("Take-off → "..AP.name..
       (T.atmo and string.format(" (in the atmosphere, cruising at %.0f m)", T.cruiseR - T.B.r) or "")..
       " — brake to stop")
+  end
   return true
 end
 
@@ -1922,7 +2110,7 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
   local B = T.B
   local g = vec3(core.getWorldGravity())
   local glen = g:len()
-  local wv = glen > 0.01 and g / glen or (B and norm(B.c - pos) or -up)
+  local wv = DownDir(pos, B) or -up
   local upW = -wv
   local right = vec3(construct.getWorldOrientationRight())
   local speed = vel:len()
@@ -1995,7 +2183,15 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     -- 100%: "not waiting long enough to hold the brakes").
     -- (at the air density HERE: DU's figure is the sea-level one)
     local upNoG = UpEngN() / mmax(mass, 1)
-    local late = upNoG < glen * 0.9
+    -- AGG holding the weight (on, and we're near its lift height): the ship
+    -- holds its height like one with strong up engines.
+    local aggLiftR = T.agg and T.agg.R
+    if T.agg then
+      local sA = AggRead()
+      if sA and sA.base then aggLiftR = B.r + sA.base end
+    end
+    T.aggHold = T.agg and AggIsOn() and mabs(r - aggLiftR) < 300 or false
+    local late = upNoG < glen * 0.9 and not T.aggHold
     -- (late: hold speed closer in — build 0712 still crawled at 84 km/h,
     -- 76 m out, brakes 8% then 100% at the descent: "gets too slow before")
     local aG = late and clamp(ab * 0.8, 1, 30) or clamp(ab * 0.3, 1, 8)
@@ -2004,6 +2200,14 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     local d = mmax(s - 3, 0)
     local d100 = vL / k
     local vB = d <= d100 and k * d or msqrt(vL * vL + 2 * aG * (d - d100))
+    if not late then
+      -- Ships that hold their height: the gentle curve, but a firm tail
+      -- (d/4: 25 m/s at 100 m, 2.5 m/s at 10 m). The old tail matched the
+      -- curve at 100 m/s with k = aG/100, so weak brakes (aG ~1.5) made it
+      -- a crawl from ~6 km out — 54 km/h at 1 km (Carl, 1113-2355: "crept
+      -- forward fairly slow" with down-facing engines that hold it up).
+      vB = mmin(d / 4, msqrt(2 * aG * d))
+    end
     if late then
       -- No up engines: steady 60% of the brakes right down to 10 m/s, then
       -- the last ~30 m in proportion (3 s). The "brakes fade below 100 m/s"
@@ -2027,7 +2231,7 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     -- with the brakes and creeps the last metres with the spot ahead). In
     -- the sim a ship that couldn't hold its height slowly fell onto the
     -- ground while still creeping in the air.
-    local canDesc = CanDescend()
+    local canDesc = CanDescend(nil, true)
     -- (no faster than the approach curve allows there, or it slides past)
     -- (60 m out only with 300+ m of drop to creep across in: holding
     -- height on brakes at the bottom of a short drop also stopped the
@@ -2040,13 +2244,17 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
       -- Over the spot: straight down (fast descent if we're high enough),
       -- else the normal landing.
       local name = AP.name
-      if canDesc then
+      if T.agg then
+        ParkTurnThen(AggArrive)
+      elseif canDesc then
         AP.takeoff = nil
-        StartDescent()
+        StartDescent()             -- (the descent turns to the parking heading itself)
       else
-        APDisengage(nil)
-        SetHover(false, true)
-        Msg("Over "..name.." — landing")
+        ParkTurnThen(function()
+          APDisengage(nil)
+          SetHover(false, true)
+          Msg("Over "..name.." — landing")
+        end)
       end
       return
     end
@@ -2083,6 +2291,16 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
         -- on the spot would stall a ship that isn't hovering (Carl: "it
         -- will stall and crash") — so AP off and land here, and say why.
         local name = AP.name or "the target"
+        if T.agg then
+          -- AGG trip: don't put a big AGG ship down somewhere random —
+          -- stop here in the air, the AGG holds it.
+          ShowAlert("CAN'T TURN — HOLDING", "Couldn't bank round toward "..name..
+            " — AP off, brakes held, the AGG holds the height. Turn by hand, then Alt+1", "#ffc24b", 15)
+          Msg("Couldn't bank round toward "..name.." — stopped in the air (AGG holding). Turn by hand, then Alt+1")
+          APDisengage(nil)
+          ParkBrake = true
+          return
+        end
         ShowAlert("CAN'T TURN — LANDING", "Couldn't bank round toward "..name..
           " — landing here rather than a flat turn that would stall. Re-engage (Alt+1) once down", "#ffc24b", 15)
         Msg("Couldn't bank round toward "..name.." — landing here (a flat turn would stall). Alt+1 once down to carry on")
@@ -2123,7 +2341,15 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     -- only hold below ~1.5 km, so it slowed up there, sank, and crawled.
     -- Not below the descent start + 350 m (terrain / the spot).
     local upFullA = mmax(((Thrust and Thrust.U) or 0) - ((Thrust and Thrust.G) or 0), 0) / mmax(mass, 1)
-    if Thrust and Thrust.atmo and upFullA > glen * 1.15 and upNoG < glen * 1.15 and not T.turning
+    if T.agg then
+      -- AGG trip cruising above the AGG height (it's below the highest
+      -- ground): come down to the AGG height for the end of the trip.
+      if not T.agg.cruise and not T.turning and s < 2 * BrakeDist(mmax(vF, 0), ab) + 1500
+         and T.agg.R < (T.holdR or T.cruiseR) - 1 then
+        T.holdR = T.agg.R
+        if not T.lowMsg then T.lowMsg = true; Msg(string.format("Coming down to the AGG height (%.0f m) for %s", T.agg.alt, AP.name or "the spot")) end
+      end
+    elseif Thrust and Thrust.atmo and upFullA > glen * 1.15 and upNoG < glen * 1.15 and not T.turning
         and s < 2 * BrakeDist(mmax(vF, 0), ab) + 1500 then
       local want = mmax(r - 150, (AP.descentR or (T.B and T.B.r) or r) + 350)
       if want < (T.holdR or T.cruiseR) - 1 then
@@ -2218,8 +2444,11 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     -- Carl's 'Up 193 MN' was all hover/VBoost and it still sank)
     local upA = UpEngN() / mmax(mass, 1)
     local slowF = clamp((120 - vF) / 40, 0, 1)
-    local noUp = upA < glen * 0.9
-    if slowF > 0 and not T.slowMsg then
+    local noUp = upA < glen * 0.9 and not T.aggHold
+    if slowF > 0 and not T.slowMsg and T.aggHold then
+      T.slowMsg = true
+      Msg("Slowing for "..(AP.name or "the spot").." — the AGG holding the height")
+    elseif slowF > 0 and not T.slowMsg then
       T.slowMsg = true
       -- (has them, but too weak in this thin air: say so — Carl's 2323 run
       -- said "no down-facing engines" on a ship that has them)
@@ -2242,7 +2471,9 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     -- Down-facing engines (pushing up) hold the height when slow (learned like the
     -- throttle trim); fades out above ~430 km/h where the wings do it.
     if upA > 0.5 and slowF > 0 then
-      T.vl = clamp((T.vl or 0) + 0.4 * vErr * dtc, 0, upA)
+      -- (faster learning: from 0 at 0.4 it took ~8 s to take the weight
+      -- the wings gave up, and the ship sank meanwhile — 1113-2355)
+      T.vl = clamp((T.vl or 0) + 0.8 * vErr * dtc, 0, upA)
       vAcc = clamp(T.vl + 0.8 * vErr, 0, upA) * slowF
     else
       T.vl = 0
@@ -2312,8 +2543,15 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     -- Carl, 1113-2049, engines on all sides: sank 8 m/s at 2.2 km, the
     -- fall guard held the brakes at 100% (brakes also kill the forward
     -- speed) and it crawled the last 500 m at 170 km/h.
-    if not noUp and slowF > 0 and not T.upWeak then
-      if vAcc > 0.5 and vUp < vUpDes - 3 then
+    -- (never on an AGG trip: "let it sink" there dropped the Hammer Crest
+    -- ~900 m under the lift, where the AGG no longer holds — 1114-1049)
+    if not noUp and slowF > 0 and not T.upWeak and not T.agg then
+      -- (only once they're asked for at least the full weight, or all they
+      -- have: at 97% air it called strong engines weak while their trim
+      -- was still building up — 1113-2355)
+      -- (and actually SINKING: climbing slower than wanted on the way up to
+      -- the cruise height counted as "sinking" and set it off — sim)
+      if vAcc >= mmin(glen, upA * slowF * 0.9) and vUp < mmin(vUpDes, 0) - 3 then
         T.upWeakT = T.upWeakT or tNow
         if tNow - T.upWeakT > 3 then
           T.upWeak = true
@@ -2325,8 +2563,14 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     end
     if T.upWeak then noUp = true end
     local fallAt = -8
-    if noUp and slowF > 0 and AP.descentR and r > AP.descentR + 350 then fallAt = -25 end
-    fallAt = mmin(fallAt, vUpDes - 8)
+    if T.agg then
+      -- AGG trip: stay at the AGG height — brakes from a 4 m/s sink (more
+      -- than the planned rate only when coming down to the AGG height).
+      fallAt = mmin(-4, vUpDes - 4)
+    else
+      if noUp and slowF > 0 and AP.descentR and r > AP.descentR + 350 then fallAt = -25 end
+      fallAt = mmin(fallAt, vUpDes - 8)
+    end
     if vUp < fallAt then
       brake = mmax(brake, clamp((fallAt - vUp) / 10, 0.1, 1))
       if not T.fallMsg then T.fallMsg = true; Msg("Sinking "..math.floor(-vUp + 0.5).." m/s — brakes keeping it to "..math.floor(-fallAt + 0.5).." m/s") end
@@ -2491,7 +2735,7 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     -- nose while turning round loses the turn and the height)
     local pDes = pitch
     if mabs(yawErr) > math.rad(30) and not T.turning then pDes = clamp(pitch, -math.rad(5), math.rad(5)) end
-    local wYaw = upW * clamp(yawErr * 1.2, -AlignRate, AlignRate)
+    local wYaw = upW * YawRate(yawErr, upW, 1.2, AlignRate)
     local wPitch = right * clamp((pDes - pCur) * 1.2, -AlignRate, AlignRate)
     -- Bank: up to 30° into the turn, only with speed (a slow ship just
     -- turns flat), level again as it lines up.
@@ -2513,7 +2757,7 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     local bankDes = clamp(-2 * tA, -bankMax, bankMax)                  -- + = right wing low
     if T.turning and T.turnSign then bankDes = -T.turnSign * bankMax end
     local rollErr = math.atan(right:dot(wv), -up:dot(wv))            -- + = right wing low now
-    local wRoll = mabs(fwd:dot(wv)) > 0.9 and vec3() or fwd * -clamp((rollErr - bankDes) * 1.5, -0.5, 0.5)
+    local wRoll = mabs(fwd:dot(wv)) > 0.9 and vec3() or fwd * RollRate(rollErr - bankDes, fwd)
     AP.angVel = wYaw + wPitch + wRoll
   end
   AP.alignErr = math.deg(math.acos(clamp(fwd:dot(want), -1, 1)))
@@ -2521,7 +2765,9 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
   AP.vAccel = vAcc
   -- Wings: ask them to carry the weight during the trip (hand flying and
   -- SAGA do; the AP sent them nothing). Not on the pad.
-  AP.wingLift = (T.atmo and T.phase ~= "LIFT" and T.phase ~= "LINE UP") and upW * glen or nil
+  -- (not while the AGG carries the weight: wings asked for it too would
+  -- lift the ship off the AGG height)
+  AP.wingLift = (T.atmo and T.phase ~= "LIFT" and T.phase ~= "LINE UP" and not T.aggHold) and upW * glen or nil
 end
 
 -- ── Orbit hop: far side of the same planet (atmosphere planets only) ──
@@ -2706,7 +2952,60 @@ end
 --   Steers along the velocity error (desired velocity − actual), so the
 --   same rule handles accelerating, killing sideways drift and cruising.
 --   Desired speed = min(cruise cap, speed we can still brake from).
+-- ── Parking heading: turn in place over the spot ───────────────────
+-- Stopped over the spot with a parking heading (|hdg=N on the ::pos,
+-- from Navigator): hold there on the brakes (and the up engines / AGG),
+-- level, and yaw slowly to face it before the last step — the AGG hold or
+-- the landing. Done up high so a big ship's swing clears buildings (Carl).
+function ParkTurnThen(after)
+  if AP.hdg and AP.surfB then
+    AP.parkTurn = { after = after, t0 = now() }
+    AP.active = true
+    Msg(string.format("Over %s — turning to face %.0f° first", AP.name, AP.hdg))
+    return
+  end
+  after()
+end
+
+function APParkTurnStep(pos, vel, fwd, up, mass)
+  local PT = AP.parkTurn
+  local dn = DownDir(pos, AP.surfB) or -up
+  local upW = -dn
+  local right = vec3(construct.getWorldOrientationRight())
+  local hv = HeadingVec(AP.hdg, upW)
+  local fl = fwd - upW * fwd:dot(upW)
+  local yawErr = 0
+  if hv and fl:len() > 0.05 then
+    fl = fl / fl:len()
+    yawErr = math.atan(fl:cross(hv):dot(upW), fl:dot(hv))
+  end
+  local pitchAng = math.asin(clamp(fwd:dot(dn), -1, 1))
+  AP.angVel = right * clamp(pitchAng * 1.5, -0.5, 0.5) + RollLevelAV(fwd, right, up, dn)
+            + upW * YawRate(yawErr, upW, 0.6, 0.15)
+  -- Hold still: brakes, and the up engines take the weight (none / AGG:
+  -- the brakes and the AGG do it).
+  local glen = vec3(core.getWorldGravity()):len()
+  local upA = UpEngN() / mmax(mass, 1)
+  local vUp = vel:dot(upW)
+  AP.vAccel = upA > 0.5 and clamp(glen - vUp, 0, upA) or 0
+  AP.accel, AP.brake, AP.wingLift = 0, 1, nil
+  AP.phase = "PARK TURN"
+  AP.alignErr = math.deg(mabs(yawErr))
+  AP.remaining, AP.vAlong, AP.vDes = 0, 0, 0
+  local spin = vec3(construct.getWorldAngularVelocity()):len()
+  local done = not hv or (mabs(yawErr) < math.rad(2) and spin < 0.03)
+  if not done and now() - PT.t0 > 60 then
+    Msg(string.format("Couldn't finish turning to %.0f° (%.0f° off) — carrying on as it is", AP.hdg, math.deg(mabs(yawErr))))
+    done = true
+  end
+  if done then
+    AP.parkTurn = nil
+    PT.after()
+  end
+end
+
 function APStep(pos, vel, fwd, up, mass)
+  if AP.parkTurn then return APParkTurnStep(pos, vel, fwd, up, mass) end
   if AP.takeoff then return APTakeoffStep(pos, vel, fwd, up, mass) end
   if AP.descent then return APDescentStep(pos, vel, fwd, up, mass) end
   if AP.orbit then return APOrbitStep(pos, vel, fwd, up, mass) end
@@ -2905,7 +3204,8 @@ function APStep(pos, vel, fwd, up, mass)
   -- aim is unchanged). Carl: arriving upside down above a planet would
   -- freak people out.
   local gv = vec3(core.getWorldGravity())
-  if gv:len() > 0.5 then AP.angVel = AP.angVel + RollLevelAV(fwd, vec3(construct.getWorldOrientationRight()), up, gv / gv:len()) end
+  local dv = DownDir(pos)
+  if (gv:len() > 0.5 or AggIsOn()) and dv then AP.angVel = AP.angVel + RollLevelAV(fwd, vec3(construct.getWorldOrientationRight()), up, dv) end
 
   -- Approach line for the stop report (direction when braking began).
   -- Only the final approach counts (not corner braking).
@@ -3026,6 +3326,19 @@ end
 -- ── Navigator link ────────────────────────────────────────────────
 function PollNavDB()
   if not NavDB then return end
+  -- PRINT COORDS from Navigator: a switch-started PB can't print to chat,
+  -- so it leaves NAME|::pos{} in nav_print for us to show. Print only —
+  -- never a destination. The ::pos goes on its own line so it copies clean.
+  local okP, pr = pcall(NavDB.getStringValue, "nav_print")
+  if okP and pr and pr ~= "" then
+    NavDB.setStringValue("nav_print", "")
+    local pname, ppos = pr:match("^(.-)|(::pos%b{})")
+    if not ppos then pname, ppos = nil, pr:match("::pos%b{}") end
+    if ppos then
+      system.print("[NAV] "..((pname and pname ~= "") and pname or "Coordinates"))
+      system.print(ppos)
+    end
+  end
   local ok, raw = pcall(NavDB.getStringValue, "nav_ap_dest")
   if not ok or not raw or raw == "" then return end
   NavDB.setStringValue("nav_ap_dest", "")
@@ -3033,7 +3346,7 @@ function PollNavDB()
   if not pos then pos = raw:match("::pos%b{}"); name = "Navigator" end
   if not pos then return end
   local _, af = pcall(NavDB.getStringValue, "autofly")
-  if SetTarget(name, pos) then
+  if SetTarget(name, pos, ParseHdg(raw:sub((raw:find("::pos", 1, true) or 1)))) then
     if AP.active then return end   -- already re-planned in SetTarget
     if af == "1" then APEngage()
     else Msg("From Navigator: "..AP.name.."  —  Alt+1 to engage") end
@@ -3434,9 +3747,18 @@ function OnActionStart(a)
     acm:updateCommandFromActionStart(axisCommandId.longitudinal, -5.0); releasePark()
   elseif a == "booster" then Nav:toggleBoosters()
   elseif a == "antigravity" then
-    if antigrav then if antigrav.isActive() then antigrav.deactivate() else antigrav.activate() end end
+    -- The pilot's toggle — the only thing in Helmsman that turns the AGG off.
+    if antigrav then
+      if AggIsOn() then antigrav.deactivate(); Msg("AGG off")
+      else antigrav.activate()
+        Msg(AggNoPulsors() and AGG_NOPULS or "AGG on — agg N sets the height, agg here holds where you are") end
+    end
   elseif a == "gear" then
     -- hover → landing; landed or landing → hover (G mid-landing aborts it)
+    -- G during an AP trip: the pilot takes over — AP off first (Carl,
+    -- 1114-1100: G mid take-off said "Landing" but the climb kept full
+    -- throttle until he braked).
+    if AP.active then APDisengage("G pressed") end
     if ParkHold then ParkRelease(nil) end
     -- GLandsDirect: flying (not sitting on anything) → land in one press.
     if GLandsDirect and HoverState == "landed" and not OnGround then
@@ -3496,6 +3818,171 @@ function OnActionLoop(a)
   end
 end
 
+-- ── Anti-gravity generator ───────────────────────────────────────
+-- The target height is stored on the AGG element itself (it survives
+-- getting up, restarts and reinstalls), so nothing is saved here.
+-- Helmsman never turns the AGG off — only the pilot's Alt+G does.
+AGG_MIN = 1000
+Agg = {}
+
+function AggIsOn()
+  if not antigrav then return false end
+  local ok, a = pcall(antigrav.isActive)
+  return ok and (a == true or a == 1)
+end
+
+-- Height above sea level (what the AGG works in).
+function SeaAltitude()
+  if core then
+    local ok, a = pcall(core.getAltitude)
+    if ok and tonumber(a) and a ~= 0 then return a end
+  end
+  local pos = vec3(construct.getWorldPosition())
+  local B = NearestBody(pos)
+  return B and ((pos - B.c):len() - B.r) or nil
+end
+
+function AggRead()
+  if not antigrav then return nil end
+  local function num(f) if not f then return nil end local ok, v = pcall(f); return ok and tonumber(v) or nil end
+  return { on = AggIsOn(), target = num(antigrav.getTargetAltitude) or Agg.setTo,
+           base = num(antigrav.getBaseAltitude), field = num(antigrav.getFieldStrength),
+           pulsors = num(antigrav.getPulsorCount), alt = SeaAltitude() }
+end
+
+-- No pulsors linked to this generator = no lift at all, whatever the
+-- heights say (seen on the Hammer Crest: green "holding", ship fell).
+function AggNoPulsors(s)
+  s = s or AggRead()
+  return s and s.pulsors == 0
+end
+AGG_NOPULS = "AGG has no pulsors linked — it can't lift anything. Link the pulsors to this generator (agg shows the count)"
+
+-- ── AGG trip ──
+-- AGG on (with pulsors) and the target a spot on a planet with air: the
+-- AP stays in the air and stops over the spot at the AGG's height (above
+-- sea level, same as the AGG) instead of landing — for ships that don't
+-- land (Carl's L-core carrier has an elevator down to the ground).
+-- Returns the plan, or nil + why it's a normal trip instead.
+AGG_TERRAIN_MARGIN = 100
+function AggTripPlan(B, spotR, mapPick)
+  if not (antigrav and B and (B.atm or 0) > 0) then return nil end
+  local s = AggRead()
+  if not (s and s.on) then return nil end
+  if s.pulsors == 0 then return nil, "the AGG has no pulsors linked" end
+  local alt = s.target or s.base
+  if not alt then return nil end
+  local R = B.r + alt
+  local safe = R >= B.top + AGG_TERRAIN_MARGIN       -- clears the planet's highest ground
+  -- A spot AT the AGG height (within 30 m below to 25 m above it) was
+  -- saved in the air while the AGG held the ship (Carl, 1114: his base
+  -- spot for the carrier, saved hovering at ~1300 m, made it a normal
+  -- trip — climb, then land — instead of a straight run at the AGG height).
+  local air = spotR and spotR > R - 30 and spotR <= R + 25
+  if spotR and not air and spotR + 30 > R then
+    return nil, string.format("the spot is above the AGG height (%.0f m) — set it higher (agg N) to stay up", alt)
+  end
+  if not spotR and mapPick and not safe then
+    return nil, "map pick (ground height unknown) and the AGG height is below the highest ground"
+  end
+  return { R = R, alt = alt, base = s.base, cruise = safe, air = air }
+end
+
+function AggTripNote(ag, spotR)
+  if ag.air then
+    return string.format("AGG on — the spot is at the AGG height (saved in the air): flies there at %.0f m and holds", ag.alt)
+  end
+  return string.format("AGG on — stays in the air: stops over the spot at %.0f m%s", ag.alt,
+    spotR and string.format(" (%.0f m above it)", ag.R - spotR) or "")
+end
+
+-- Over the spot at the AGG height: AP off, brakes held, the AGG holds it.
+function AggArrive()
+  local name, ag = AP.name, AP.agg
+  APDisengage(nil)
+  AP.phase = "ARRIVED"
+  ParkBrake = true
+  local alt = SeaAltitude()
+  Msg(string.format("Arrived over %s — AGG holding at %.0f m%s, brakes held", name, ag and ag.alt or (alt or 0),
+    (AP.spotR and alt and not (ag and ag.air)) and string.format(" (%.0f m above the spot)", alt - (AP.spotR - AP.surfB.r)) or ""))
+end
+
+-- How fast the lift point is creeping (m/s), for the HUD's time estimate.
+function AggTick()
+  local s = AggRead()
+  if not (s and s.base) then return end
+  local t = now()
+  if Agg.lastB and t > Agg.lastT then
+    local r = mabs(s.base - Agg.lastB) / (t - Agg.lastT)
+    if r > 0.05 then Agg.rate = Agg.rate and (Agg.rate * 0.7 + r * 0.3) or r end
+  end
+  Agg.lastB, Agg.lastT = s.base, t
+end
+
+function AggCommand(arg)
+  if not antigrav then Msg("No anti-gravity generator linked to the seat") return end
+  local s = AggRead()
+  if not arg or arg == "" then
+    system.print(string.format("[HELM] AGG %s · height set %s · lift at %s · you're at %s%s",
+      s.on and "ON" or "OFF",
+      s.target and string.format("%.0f m", s.target) or "?",
+      s.base and string.format("%.0f m", s.base) or "?",
+      s.alt and string.format("%.0f m", s.alt) or "?",
+      s.field and string.format(" · field strength %s", tostring(s.field)) or ""))
+    -- Raw strength figures DU gives (whatever this AGG supports), to learn
+    -- what "enough pulsors" looks like on a ship that holds vs one that sinks.
+    local function raw(name)
+      local f = antigrav[name]
+      if type(f) ~= "function" then return nil end
+      local ok, v = pcall(f)
+      return ok and v ~= nil and (name:gsub("^get", "").." "..tostring(v)) or nil
+    end
+    local bits = {}
+    for _, n in ipairs({ "getFieldStrength", "getCompensationRate", "getFieldPower", "getPulsorCount", "getMaxPower" }) do
+      local r = raw(n); if r then bits[#bits+1] = r end
+    end
+    system.print(string.format("[HELM] AGG strength: %s · ship mass %.1f t",
+      #bits > 0 and table.concat(bits, " · ") or "DU gives no figures", construct.getMass() / 1000))
+    system.print("[HELM] agg N sets the height (metres, "..AGG_MIN.." or more) · agg here holds where you are · agg on|off (or Alt+G)")
+    return
+  end
+  -- On/off by chat (for when Alt+G is taken by another program). Still the
+  -- pilot's own command — nothing automatic ever turns the AGG off.
+  if arg == "on" then
+    if s.on then Msg("AGG is already on") else pcall(antigrav.activate); Msg(AggNoPulsors(s) and AGG_NOPULS or "AGG on") end
+    return
+  elseif arg == "off" then
+    if s.on then pcall(antigrav.deactivate); Msg("AGG off") else Msg("AGG is already off") end
+    return
+  end
+  local want
+  if arg == "here" then
+    want = s.alt and math.floor(s.alt + 0.5)
+  else
+    local a = arg:gsub("[,%s]", "")
+    local km = a:match("^([%d%.]+)km$")
+    want = km and tonumber(km) and tonumber(km) * 1000 or tonumber((a:gsub("m$", "")))
+  end
+  if not want then Msg("agg N (metres) · agg here · agg  —  e.g. agg 2500") return end
+  want = math.floor(want + 0.5)
+  if want < AGG_MIN then
+    Msg(string.format("The AGG can't hold below %d m%s — pick %d or higher", AGG_MIN,
+      arg == "here" and string.format(" (you're at %.0f m)", want) or "", AGG_MIN))
+    return
+  end
+  if not pcall(antigrav.setTargetAltitude, want) then Msg("The AGG didn't take the new height") return end
+  Agg.setTo = want
+  if not s.on then
+    Msg(string.format("AGG height set to %d m — the AGG is off (agg on or Alt+G turns it on)", want))
+  elseif s.base and mabs(s.base - want) > 2 then
+    local eta = (Agg.rate and Agg.rate > 0.05) and (" (~"..FormatTime(mabs(want - s.base) / Agg.rate)..")") or ""
+    Msg(string.format("AGG height set to %d m — but the lift is still at %.0f m: until it creeps here%s the AGG pulls you toward %.0f m, not here. Hold height with your engines until the AGG row turns green",
+      want, s.base, eta, s.base))
+  else
+    Msg(string.format("AGG height set to %d m", want))
+  end
+end
+
 -- ── Lua chat commands ─────────────────────────────────────────────
 function PrintHelp()
   system.print("── Helmsman v"..VERSION.." ──")
@@ -3510,6 +3997,9 @@ function PrintHelp()
   system.print("thrust                engine push in all 6 directions")
   system.print("landsafety N          landing margin 0.1-1 (lower = gentler), saved")
   system.print("park                  stop and hold position (Alt+5)")
+  system.print("agg N / agg here      AGG hover height (min "..AGG_MIN.." m, kept on the AGG) · agg = status")
+  system.print("agg on / agg off      AGG on/off (same as Alt+G)")
+  system.print("hdg · hdg N/here/off  nose heading · parking heading for this target (or |hdg=N after a ::pos)")
   system.print("fhud                  fighter-style attitude HUD on/off (Alt+6)")
   system.print("navinfo [on|off]      AUTOPILOT panel (target, ETA, brake distance)")
   system.print("farside               test: target the far side of the nearest planet")
@@ -3544,7 +4034,7 @@ function OnInputText(text)
     local name, pos = t:match("^(.-)%s*(::pos%b{})")
     -- "goto ::pos", "/goto ::pos" (Arch habit) or just "::pos" all work
     name = (name or ""):gsub("^/?[Gg][Oo][Tt][Oo]%s*", ""):gsub("^/%s*", "")
-    if SetTarget(name, pos or t) and AutoEngagePaste and not AP.active then APEngage() end
+    if SetTarget(name, pos or t, ParseHdg(t:sub(t:find("::pos{", 1, true)))) and AutoEngagePaste and not AP.active then APEngage() end
   elseif lo == "help" or lo == "?" then PrintHelp()
   elseif lo == "ap" then if AP.active then APDisengage("chat") else APEngage(true) end
   elseif lo == "ap on" or lo == "go" then APEngage(true)
@@ -3639,6 +4129,25 @@ function OnInputText(text)
     end
     system.print(string.format("[HELM] %d linked · radars found %d", n, #Radars))
   elseif lo == "park" then if ParkHold then ParkRelease(nil) else ParkEngage() end
+  elseif lo == "agg" or lo:match("^agg%s") then AggCommand(lo:match("^agg%s+(.-)%s*$"))
+  elseif lo == "hdg" or lo:match("^hdg%s") then
+    -- hdg = which way the nose faces · hdg N / hdg here / hdg off = the
+    -- current target's parking heading
+    local arg = lo:match("^hdg%s+(.-)%s*$")
+    local pos = vec3(construct.getWorldPosition())
+    local dv = DownDir(pos)
+    local cur = dv and HeadingOf(vec3(construct.getWorldOrientationForward()), -dv)
+    if not arg then
+      Msg(cur and string.format("Facing %.0f° (0 = north, 90 = east) — add |hdg=%.0f after a ::pos to park facing this way", cur, cur)
+              or "No heading here (no planet nearby, nose straight up/down, or at a pole)")
+      if AP.target then Msg(AP.hdg and string.format("%s parks facing %.0f°", AP.name, AP.hdg) or (AP.name.." has no parking heading")) end
+    elseif not (AP.target and AP.surfB) then Msg("Set a surface destination first")
+    elseif arg == "off" then AP.hdg = nil; SaveTarget(); Msg(AP.name.." — no parking heading")
+    else
+      local h = arg == "here" and cur or tonumber(arg)
+      if not h then Msg("hdg N (0-360), hdg here, or hdg off")
+      else AP.hdg = h % 360; SaveTarget(); Msg(string.format("%s parks facing %.0f°", AP.name, AP.hdg)) end
+    end
   elseif lo == "fhud" then ToggleFlightHud()
   elseif lo:match("^navinfo") then
     local arg = lo:match("^navinfo%s+(%a+)")
@@ -3754,7 +4263,7 @@ end
 
 -- ── HUD (AR overlay) ──────────────────────────────────────────────
 local PHASE_COL = { OFF="#7f8c99", ALIGN="#ffc24b", BURN="ACC", CRUISE="#5be37a",
-  BRAKING="#ff9a3c", STOPPING="#ff9a3c", OBSTACLE="#ff3b3b", DESCENT="ACC", LIFT="ACC", ["LINE UP"]="#ffc24b", CLIMB="ACC", ORBIT="ACC", SLOWING="#ff9a3c", TURN="#ffc24b", ["KILL DRIFT"]="#ffc24b", CORRECT="#ffc24b", ARRIVED="#5be37a" }
+  BRAKING="#ff9a3c", STOPPING="#ff9a3c", OBSTACLE="#ff3b3b", DESCENT="ACC", LIFT="ACC", ["LINE UP"]="#ffc24b", CLIMB="ACC", ORBIT="ACC", SLOWING="#ff9a3c", TURN="#ffc24b", ["KILL DRIFT"]="#ffc24b", CORRECT="#ffc24b", ["PARK TURN"]="#ffc24b", ARRIVED="#5be37a" }
 
 -- ── Fighter-style attitude HUD (Alt+6 / "fhud") ───────────────────
 -- Centre-screen SVG: pitch ladder + horizon, roll scale, fixed ship
@@ -3788,7 +4297,10 @@ function FlightHudSvg(acc)
   local B, alt = nearestBody(pos)
   local g = vec3(core.getWorldGravity())
   local upW
-  if g:len() > 0.05 then upW = g / -g:len()
+  -- (not from gravity alone: an AGG holding the ship makes it ~0 and
+  -- pointing anywhere — horizon upside down)
+  local dv = DownDir(pos)
+  if dv and (g:len() > 0.05 or AggIsOn()) then upW = -dv
   elseif B and alt and alt < 2 * SU then upW = norm(pos - B.c) end
   local col = "rgb("..acc..")"
   local fs = clamp(FlightHudScale, 0.4, 1.5)
@@ -4121,10 +4633,20 @@ function DrawHUD()
     add('<div class="tg">'..esc(AP.name)..'</div>')
     if AP.note then add('<div class="nt">'..esc(AP.note)..'</div>') end
     local dist = (AP.target - pos):len()
-    -- Atmosphere hop: AP.target is the hold point up in space; show the
-    -- distance over the ground to the spot instead.
-    if AP.active and AP.takeoff and AP.takeoff.atmo and AP.remaining then dist = AP.remaining end
-    local remaining = AP.active and AP.remaining or (dist - StopDist())
+    -- Near the planet of a surface spot, AP.target is the hold point up in
+    -- space: show the distance over the ground to the spot instead (Carl,
+    -- 1114: parked 1 km from the spot it said 15.1 km and a negative ETA).
+    local spotDist
+    if AP.spot and AP.surfB and (pos - AP.surfB.c):len() < AP.surfB.hard + 1000 then
+      local Bs = AP.surfB
+      local rp, rr = norm(pos - Bs.c)
+      local dS = norm(AP.spot - Bs.c)
+      spotDist = math.atan(rp:cross(dS):len(), rp:dot(dS)) * rr
+    end
+    if AP.active and AP.takeoff and AP.takeoff.atmo and AP.remaining then dist = AP.remaining
+    elseif not AP.active and spotDist then dist = spotDist end
+    local remaining = AP.active and AP.remaining or (spotDist and dist or (dist - StopDist()))
+    remaining = mmax(remaining or 0, 0)
     local vAlong = AP.active and AP.vAlong or 0
     local eta = CalcETA(remaining, vAlong, CruiseCap(), MaxThrustN / mmax(mass, 1), BrakeAccel(mass))
     row("DISTANCE · ETA", FormatDist(dist).." · "..(AP.active and FormatTime(eta) or ("~"..FormatTime(eta))))
@@ -4183,6 +4705,29 @@ function DrawHUD()
     row("RADAR", ActiveRadar and (RadarContacts.." contact"..(RadarContacts == 1 and "" or "s"))
                  or '<span style="color:#ff5a5a">not operational here</span>')
   end
+  -- AGG: off (grey) · lift creeping to the set height (amber, with a time
+  -- estimate) · holding (green). Plus how far you are from the lift.
+  if antigrav then
+    local s = AggRead()
+    local tgt = s.target
+    local v
+    if not s.on then
+      v = '<span style="color:#8a98a6">off'..(tgt and string.format(" · set %.0f m", tgt) or "")..'</span>'
+    elseif s.pulsors == 0 then
+      v = '<span style="color:#ff5a5a">no pulsors linked</span>'
+    elseif s.base and tgt and mabs(s.base - tgt) > 2 then
+      local eta = (Agg.rate and Agg.rate > 0.05) and (" · ~"..FormatTime(mabs(tgt - s.base) / Agg.rate)) or ""
+      v = '<span style="color:#ffc24b">'..string.format("%.0f → %.0f m", s.base, tgt)..eta..'</span>'
+    else
+      v = '<span style="color:#5be37a">'..string.format("holding %.0f m", s.base or tgt or 0)..'</span>'
+    end
+    row("AGG", v)
+    if s.on and s.pulsors == 0 then
+      add('<div class="nt" style="color:#ff5a5a">no lift — link the pulsors to this generator</div>')
+    elseif s.on and s.base and s.alt and mabs(s.alt - s.base) > 100 then
+      add('<div class="nt">you\'re '..FormatDist(mabs(s.alt - s.base))..(s.alt < s.base and ' below' or ' above')..' the lift</div>')
+    end
+  end
   add('</div>')
 
   add('</div>')   -- /cols
@@ -4207,6 +4752,7 @@ function FlightTick(id)
     ReadFuel()
     UpdateRadar()
     ReadWarp()
+    AggTick()
     PollNavDB()
     APAdvanceLegs()
     PredictCorrect()
@@ -4242,7 +4788,7 @@ if NavDB then
     local name, pos = saved:match("^(.-)|(::pos%b{})")
     if pos and ParsePos(pos) then
       local m = Msg; Msg = function() end   -- restore quietly
-      SetTarget(name, pos)
+      SetTarget(name, pos, ParseHdg(saved:sub(saved:find("::pos", 1, true) or 1)))
       Msg = m
     end
   end
@@ -4259,7 +4805,7 @@ system.print("[HELM] Helmsman v"..VERSION.." (build "..BUILD..")"..
       mine = "OK (no Navigator yet)", blank = "OK (no Navigator yet)", other = "OK (other data)" })[BankKind(NavDB)] or "none")..
   "  |  antigrav="..(antigrav and "OK" or "none")..
   "  |  ground sensors="..#GroundEngines..
-  "  |  radars="..#Radars..
+  "  |  radars="..#Radars..(#Switches > 0 and ("  |  switches="..#Switches) or "")..
   "  |  warp="..(WarpDrive and "OK" or "none"))
 ScanFuelTanks()
 ReadFuel()
@@ -4297,6 +4843,7 @@ event=onStop
 pcall(player.freeze, false)
 system.showScreen(false)
 if HideBuildHelper then pcall(system.showHelper, true) end
+for _, sw in ipairs(Switches or {}) do pcall(sw.deactivate) end   -- seat switches off (never the AGG)
 
 --[[@
 slot=unit
