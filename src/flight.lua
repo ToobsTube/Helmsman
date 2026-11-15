@@ -403,7 +403,7 @@ end
 function RestoreGroundStab()
   -- (under water: never — the hovers read 0 there and DU's hold drives
   -- them flat out for the surface: "let go of C and it shoots up", Carl)
-  if UnderwaterNow then return end
+  if UnderwaterNow or UwRise then return end
   if HoverState == "hover" then
     Nav.axisCommandManager:activateGroundEngineAltitudeStabilization(Nav:getTargetGroundAltitude())
   end
@@ -454,6 +454,10 @@ function TeleDown()
   local pos = vec3(construct.getWorldPosition())
   local best, range = -1, 0
   for _, t in ipairs(Telemeters) do
+    if t.helmDown == nil then
+      local okI, id = pcall(t.getLocalId)
+      t.helmDown = (okI and id and DbGetNum("sf_tdown_"..tostring(id)) == 1) or false
+    end
     local ok, r = pcall(t.raycast)
     local okM, m = pcall(t.getMaxDistance)
     m = (okM and tonumber(m)) or 100
@@ -478,7 +482,13 @@ function TeleDown()
               + vec3(construct.getWorldOrientationForward()) * L.y
               + vec3(construct.getWorldOrientationUp()) * L.z
       local v = p - o
-      if v:len() > 0.5 and (v / v:len()):dot(dn) > 0.95 then t.helmDown = true end
+      if v:len() > 0.5 and (v / v:len()):dot(dn) > 0.95 and not t.helmDown then
+        t.helmDown = true
+        -- remembered on the databank: a paste over deep water (nothing in
+        -- range to prove it) still knows it points down (Carl, 1115-1116)
+        local okI, id = pcall(t.getLocalId)
+        if okI and id then DbSetNum("sf_tdown_"..tostring(id), 1) end
+      end
       if t.helmDown then
         local d = tonumber(r.distance) or v:len()
         if best < 0 or d < best then best = d end
@@ -566,7 +576,10 @@ function WaterCheck(vDown)
   end
   local pos = vec3(construct.getWorldPosition())
   local B = NearestBody(pos)
-  if not B or (B.atm or 0) <= 0 or (pos - B.c):len() - B.r > 20 then waterT = nil return false end
+  -- (only AT the surface: deep under water a G landing tripped this too —
+  -- "hovering on the water, brakes held" at −282 m, and the next G sank it)
+  local hSea = B and (pos - B.c):len() - B.r or 0
+  if not B or (B.atm or 0) <= 0 or hSea > 20 or hSea < -5 then waterT = nil return false end
   -- Landing on a spot saved UNDER water (below sea level, and we're over
   -- it): that's where you want to be — no stop at the surface (Carl).
   if AP.surfB == B and AP.spotR and AP.spotR < B.r - 2 and AP.target then
@@ -3994,7 +4007,8 @@ function FlightFlush()
   -- holds still (and carries its own weight with the up thrusters).
   local man = (Mode == 2) and not AP.active
   local manAcc, manIdle
-  if not man or ParkHold then ManHoldPos = nil end   -- after AP/park: hold the height you're at then
+  -- (kept across a mode switch under water: both modes hold the same depth)
+  if (not man and not UnderwaterNow) or ParkHold or AP.active then ManHoldPos = nil end   -- after AP/park: hold the height you're at then
   -- Under water (below sea level on a planet with air): hovers read 0 there
   -- and push for the surface, so in Maneuver mode they're switched off and
   -- the engines own the height — drive down with C, let go, it holds that
@@ -4008,19 +4022,21 @@ function FlightFlush()
     -- holding a ship that's resting on the dirt)
     if HoverState == "landed" and OnGround then underwater = false end
     -- DU's own hover hold works inside the engines, whatever we command:
-    -- switch it off going under, back on (if hovering) coming out.
-    if underwater and not UnderwaterNow then
+    -- switch it off under water, back on (if hovering) coming out. Except
+    -- after G under water (UwRise): that means "take me up" — leave it on
+    -- (Carl, 1115-1059: G on the seabed right after a paste stayed down).
+    if underwater and not UwStabOff then
       Nav.axisCommandManager:deactivateGroundEngineAltitudeStabilization()
+      UwStabOff = true
     end
     if not underwater and UnderwaterNow then
-      UnderwaterNow = false
-      RestoreGroundStab()
+      UnderwaterNow, UwStabOff = false, nil
+      if not UwRise then RestoreGroundStab() end   -- (a rise hands over itself, at the hover height)
     end
     UnderwaterNow = underwater
     if underwater and not UnderwaterMsg then
       UnderwaterMsg = true
-      Msg(man and "Under water — hovers off, Maneuver mode holds the depth with the engines. Space/C: up/down"
-              or "Under water — hovers off (they'd push for the surface). Alt+4 Maneuver mode holds a depth")
+      Msg("Under water — hovers off, the engines hold the depth. Space/C: up/down · G: rise to the surface")
     elseif not underwater then UnderwaterMsg = nil end
   end
   if man then
@@ -4085,8 +4101,39 @@ function FlightFlush()
   end
 
   -- Brakes
+  -- Rising from under water after G (UwRise): our own controlled climb to
+  -- HoverHeight above sea level, then DU's hover hold takes over. DU's
+  -- hold alone pushed flat out (hovers read 0 under water) and the ship
+  -- left the sea fast enough to coast to ~2 km (Carl, 1115-1105).
+  local uwRiseAcc, uwRiseBrake = nil, 0
+  if UwRise and HoverState == "hover" and not AP.active then
+    local p = vec3(C.getWorldPosition())
+    local Bs = NearestBody(p)
+    local gW = vec3(core.getWorldGravity())
+    if Bs and (Bs.atm or 0) > 0 and gW:len() > 0.1 then
+      local upW = -gW / gW:len()
+      local vUpR = vel:dot(upW)
+      local dist = mmax(tonumber(HoverHeight) or 10, 5) - ((p - Bs.c):len() - Bs.r)
+      -- up to 25 m/s, easing in at ~1.5 m/s² so it arrives nearly stopped
+      local vWant = clamp(msqrt(3 * mmax(dist, 0)), 0, 25)
+      if dist < 3 then vWant = mmax(dist, 0) * 0.5 end
+      uwRiseAcc = upW * clamp((vWant - vUpR) * 1.5, -3, 15) - gW
+      if vUpR > vWant + 2 then uwRiseBrake = clamp((vUpR - vWant) / 5, 0.2, 1) end
+      if dist <= 1.5 and mabs(vUpR) < 1.5 then
+        UwRise, uwRiseAcc = nil, nil
+        RestoreGroundStab()
+        -- same as landing on water: brakes held, G sinks (Carl)
+        ParkBrake, WaterHold = true, true
+        Msg(string.format("At the surface — hovering %.0f m above the water, brakes held. G: sink and land on the bottom", HoverHeight))
+      end
+    else
+      UwRise = nil
+    end
+  end
+
   local fB = clamp(brakeInput, 0, 1)
   if ParkBrake then fB = 1 end
+  fB = mmax(fB, uwRiseBrake)
   if AP.active then fB = mmax(fB, AP.brake) end
   fB = mmax(fB, LandBrake)
   if park then fB = mmax(fB, parkBrake) end
@@ -4175,6 +4222,20 @@ function FlightFlush()
       if upInput ~= 0 then
         -- Space / C held: everything that can push vertically helps.
         Nav:setEngineForceCommand(vrtTags, vAcc, keep, 'airfoil', 'ground', '', tol)
+        if underwater then ManHoldPos = nil end   -- (let go: hold the new depth)
+      elseif underwater and HoverState ~= "landing" then
+        -- Under water, Flight mode holds the depth too (hovers are off
+        -- there), the same held spot as Maneuver mode — so switching modes
+        -- doesn't drop the ship or jerk it back (Carl, 1115-1127).
+        local wvD = vec3(core.getWorldVertical())
+        local gW = vec3(core.getWorldGravity())
+        local p = vec3(C.getWorldPosition())
+        if not ManHoldPos then ManHoldPos = p end
+        local below = (p - ManHoldPos):dot(wvD)            -- + = sunk below the held depth
+        local vWant = clamp(below * 0.8, -10, 10)
+        local vUpNow = -vel:dot(wvD)
+        Nav:setEngineForceCommand(vrtTags, -wvD * ((vWant - vUpNow) * 1.0) - gW, keep, 'airfoil', '', '', tol)
+        Nav:setEngineForceCommand('ground', vec3(), keep)
       else
         -- No vertical input: vertical THRUSTERS stay silent (otherwise DU
         -- uses them to float the ship against gravity). Order matters —
@@ -4194,6 +4255,10 @@ function FlightFlush()
       if fB ~= 0 or autoBrake or mabs(velDir:dot(fwd)) < 0.95 then autoTags = autoTags..', brake' end
       Nav:setEngineForceCommand(autoTags, autoAcc, dontKeep, '', '', '', tol)
     end
+  end
+
+  if uwRiseAcc then
+    Nav:setEngineForceCommand('thrust analog vertical', uwRiseAcc, keep, 'airfoil', 'ground', '', tol)
   end
 
   Nav:setBoosterCommand('rocket_engine')
@@ -4310,6 +4375,7 @@ function OnActionStart(a)
   elseif a == "down" then
     upInput = -1
     acm:deactivateGroundEngineAltitudeStabilization()
+    if UwRise then UwRise, UwStabOff = nil, true end   -- C: stay under after all
     acm:updateCommandFromActionStart(axisCommandId.vertical, -1.0); releasePark()
   elseif a == "groundaltitudeup"   then acm:updateTargetGroundAltitudeFromActionStart(1.0)
   elseif a == "groundaltitudedown" then acm:updateTargetGroundAltitudeFromActionStart(-1.0)
@@ -4369,8 +4435,21 @@ function OnActionStart(a)
     else
       SetHover(HoverState ~= "hover")
     end
+    -- G to hover while under water = rise to the surface and hover there
+    local underSea = false
+    do
+      local p = vec3(construct.getWorldPosition())
+      local Bs = NearestBody(p)
+      underSea = Bs and (Bs.atm or 0) > 0 and (p - Bs.c):len() - Bs.r < -3 or false
+    end
+    if HoverState == "hover" and underSea then
+      UwRise, UwStabOff = true, true
+      Nav.axisCommandManager:deactivateGroundEngineAltitudeStabilization()
+      Msg(string.format("Rising to the surface — hovering %.0f m above it (C: stay under)", HoverHeight))
+    else
     Msg(HoverState == "hover" and string.format("Hover on — %.0f m", HoverHeight)
         or "Landing — setting down, engines cut when settled")
+    end
   elseif a == "light" then
     if unit.isAnyHeadlightSwitchedOn() then unit.switchOffHeadlights() else unit.switchOnHeadlights() end
   elseif a == "option1" then
