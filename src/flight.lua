@@ -1261,10 +1261,14 @@ function UpEngN(T)
 end
 function PrintThrust()
   local T = SurveyThrust()
-  system.print("[HELM] Thrust ("..(T.atmo and "atmo" or "space").."):  Fwd "..fmtN(T.F).." · Back "..fmtN(T.B)..
-    " · Left "..fmtN(T.L).." · Right "..fmtN(T.R).." · Up "..fmtN(T.U).." · Down "..fmtN(T.D))
-  system.print("[HELM] Hover/VBoost "..fmtN(T.G).." · Weight here "..fmtN(T.weight))
+  -- "Up" = real up engines only. Hovers / vertical boosters only push
+  -- within ~15 m of the ground, and counting them in "Up" hid that a ship
+  -- had no up engines at all (the carrier read "Up 895.8 MN", all hovers).
   local upFull = mmax((T.U or 0) - (T.G or 0), 0)
+  local hov = (T.G or 0) > 0 and (" (+ "..fmtN(T.G).." hover/VBoost, ground range only)") or ""
+  system.print("[HELM] Thrust ("..(T.atmo and "atmo" or "space").."):  Fwd "..fmtN(T.F).." · Back "..fmtN(T.B)..
+    " · Left "..fmtN(T.L).." · Right "..fmtN(T.R).." · Up "..fmtN(upFull)..hov.." · Down "..fmtN(T.D))
+  system.print("[HELM] Weight here "..fmtN(T.weight))
   if T.atmo and upFull > 0 and T.weight > 0 then
     local need = T.weight / upFull
     system.print(string.format("[HELM] Up engines (no hovers) %s at sea level, ~%s here · %s",
@@ -1947,6 +1951,9 @@ function APDescentStep(pos, vel, fwd, up, mass)
     if offNow > 4 then vmax = 0 elseif offNow > 2 then vmax = mmin(vmax, 1.5) end
   else
     if offNow > 3 and goal < 150 then vmax = mmin(vmax, 2) end
+    -- Still well off the line: fall no faster than the creep across can
+    -- keep up with (~3 m/s), so it's over the spot before it's down low.
+    if offNow > 5 then vmax = mmin(vmax, mmax(goal / (offNow / 3), 3)) end
     if offNow > 4 and goal < 15 then vmax = 0 end          -- not over it yet: hold, don't hand over
   end
   -- Parking heading: held all the way down (so it's done turning high
@@ -2438,7 +2445,10 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     local longDrop = AP.descentR and r - AP.descentR > 300
     -- (|vF|: sliding PAST the spot at 30 m/s counted as "slow" — sim with slow-spooling engines)
     -- (brakes-only speed here: the descent stops with the brakes alone)
-    if (canDesc and longDrop and s <= 60 and mabs(vF) < vBrk + 1 and vSide < 3) or (s <= 8 and vH:len() < 1.5) then
+    -- (25 m, was 60: the descent's sideways creep is slow, and from 50 m
+    -- short a 418 m drop ended at hover height still short, then moved
+    -- across low — Carl, 1114-2129, Market 7)
+    if (canDesc and longDrop and s <= 25 and mabs(vF) < vBrk + 1 and vSide < 3) or (s <= 8 and vH:len() < 1.5) then
       -- Over the spot: straight down (fast descent if we're high enough),
       -- else the normal landing.
       local name = AP.name
