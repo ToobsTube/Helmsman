@@ -22,7 +22,7 @@ event=onStart
 --  Every setting below is an export parameter, so on a DRM-protected
 --  seat owners can still change them via "Edit Lua Parameters".
 -- ════════════════════════════════════════════════════════════════════
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 BUILD   = "dev"   -- stamped by build.js (date-time), shown on the HUD so you can tell which paste is running
 
 -- ── Server ────────────────────────────────────────────────────────
@@ -1852,6 +1852,21 @@ function APEngage(allowTakeoff)
   if CanDescend() then StartDescent() return true end
   if (unit.getAtmosphereDensity() or 0) > 0.0001 or InsideBody(pos) then
     if not allowTakeoff then Msg("Target set — Alt+1 to take off") return false end
+    -- Under water: rise to the surface under control first, then take off
+    -- from hover height there (LIFT waits for the hovers to reach hover
+    -- height, and under water they read 0 — Carl: AP from the seabed).
+    do
+      local Bs = NearestBody(pos)
+      if Bs and (Bs.atm or 0) > 0 and (pos - Bs.c):len() - Bs.r < -3 then
+        if ParkHold then ParkRelease(nil) end
+        ParkBrake, WaterHold = false, nil
+        SetHover(true)
+        Nav.axisCommandManager:deactivateGroundEngineAltitudeStabilization()
+        UwRise, UwStabOff, TakeoffAfterRise = true, true, true
+        Msg("Under water — rising to the surface first, then taking off to "..AP.name.." (brake to stop)")
+        return true
+      end
+    end
     return StartTakeoff()
   end
   RefreshShipStats()
@@ -4123,8 +4138,14 @@ function FlightFlush()
         UwRise, uwRiseAcc = nil, nil
         RestoreGroundStab()
         -- same as landing on water: brakes held, G sinks (Carl)
+        if TakeoffAfterRise then
+          -- Alt+1 from under water: on with the take-off now
+          TakeoffAfterRise = nil
+          if AP.target then APEngage(true) end
+        else
         ParkBrake, WaterHold = true, true
         Msg(string.format("At the surface — hovering %.0f m above the water, brakes held. G: sink and land on the bottom", HoverHeight))
+        end
       end
     else
       UwRise = nil
@@ -4395,6 +4416,7 @@ function OnActionStart(a)
   elseif a == "brake" then
     brakeInput = 1   -- on/off, not a counter: a missed key-up can't stack
     if AP.active then APDisengage("brake pressed") end
+    if TakeoffAfterRise then TakeoffAfterRise = nil; Msg("Take-off cancelled — brake pressed (still rising; C stays under)") end
     if AP.warpResume then AP.warpResume = nil; Msg("AP won't resume after the warp — brake pressed") end
     if AltHeld then ToggleBrakeLock() end           -- Alt held, then Ctrl
     -- Plain Ctrl never releases the brake lock / park hold: hold-to-brake only.

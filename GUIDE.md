@@ -44,6 +44,7 @@ When the destination is on the planet you're on (or flying over) and that planet
 - **Landing on water:** hovers see the water surface, but a ship can't settle on it. When a landing touches the water near sea level and keeps sinking, Helmsman switches to hover: the ship floats `HoverHeight` above the water with the brakes held. Press **G** to sink and land on the bottom. A spot saved under water skips the stop and sinks straight to it.
 - **Under water:** DU's own hover hold is switched off (under water it would push flat out for the surface). Both Flight and Maneuver mode hold the depth with whatever pushes up, engines, hovers or vertical boosters, asking each for just what's needed: Space/C go up and down, let go and it holds. With a telemeter, sinking is fast and slows near the bottom.
 - **G under water** rises to the surface under control and stops at `HoverHeight` above the water with the brakes held (C cancels the rise). If the HUD shows HOVER while you're under water, the first G lands (sinks) and the second rises.
+- **Alt+1 under water** (take-off to a target): rises to the surface the same way first, then takes off from there. Brake during the rise cancels the take-off.
 
 ## Flight modes
 
@@ -147,7 +148,7 @@ Every physics tick it works out a **desired velocity**: toward the target, at th
 ## Building from source
 
 ```
-node build.js          # dist/Helmsman_v1.0.1.txt and .conf, comments stripped
+node build.js          # dist/Helmsman_v1.0.2.txt and .conf, comments stripped
 node build.js --full   # the same with all comments, for reading
 ```
 

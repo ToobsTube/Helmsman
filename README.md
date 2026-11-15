@@ -21,7 +21,7 @@ Helmsman works on its own. It's also the companion to **DU Starmap Navigator**: 
 
 ## Install
 
-Download the files from the **Releases** page: `Helmsman_v1.0.1.txt`, `Helmsman_v1.0.1.conf` and (optional) `Helmsman_ECU.conf`.
+Download the files from the **Releases** page: `Helmsman_v1.0.2.txt`, `Helmsman_v1.0.2.conf` and (optional) `Helmsman_ECU.conf`.
 
 ### Option A: paste
 1. Link the **core unit** to the seat, cockpit or remote controller. Any slot, any order: the script finds each element by what it is. Optionally also link:
@@ -30,17 +30,17 @@ Download the files from the **Releases** page: `Helmsman_v1.0.1.txt`, `Helmsman_
    - a **telemeter pointing straight down** (sees ~100 m: much faster landings onto unknown ground and water)
    - the **anti-grav generator**, **radar(s)**, the **warp drive**
    - any **manual switch** for cabin automation
-2. Open `Helmsman_v1.0.1.txt`, copy everything, then right-click the seat → *Advanced* → *Paste Lua configuration from clipboard*.
+2. Open `Helmsman_v1.0.2.txt`, copy everything, then right-click the seat → *Advanced* → *Paste Lua configuration from clipboard*.
 
 ### Option B: autoconfigure
-1. Copy `Helmsman_v1.0.1.conf` to `...\Dual Universe\Game\data\lua\autoconf\custom\`.
-2. Right-click the seat → *Advanced* → *Run custom autoconfigure* → **Helmsman v1.0.1**.
+1. Copy `Helmsman_v1.0.2.conf` to `...\Dual Universe\Game\data\lua\autoconf\custom\`.
+2. Right-click the seat → *Advanced* → *Run custom autoconfigure* → **Helmsman v1.0.2**.
    - **Linked automatically:** core, anti-grav generator, vertical boosters, hovers, telemeter, warp drive.
    - **Link by hand afterwards** (only the ones you use): the databank shared with Navigator, radar(s), manual switch(es). Fuel tanks need no links.
 
 Either way, sit down and check the Lua console:
 
-`[HELM] Helmsman v1.0.1 (build …) | atlas=atlas (N bodies) | databank=Navigator HUD bank | antigrav=OK | ground sensors=1 | telemeter=pointing down | radars=1 | warp=OK`
+`[HELM] Helmsman v1.0.2 (build …) | atlas=atlas (N bodies) | databank=Navigator HUD bank | antigrav=OK | ground sensors=1 | telemeter=pointing down | radars=1 | warp=OK`
 
 Then type `help` in Lua chat for the commands.
 
