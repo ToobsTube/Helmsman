@@ -73,6 +73,17 @@ Either way, sit down and check the Lua console:
 
 (`switches=` only appears when a switch is linked.)
 
+The built files have the comments stripped to keep the paste small (about 180 KB). Your parameters and their descriptions are kept. `node build.js --full` builds the commented version.
+
+### Emergency control unit (optional)
+`ecu/Helmsman_ECU.conf` takes over when you leave the seat while flying. Copy it to `...\autoconf\custom\`, then right-click the ECU → *Advanced* → *Run custom autoconfigure* → **Helmsman ECU**. It links the core, a hover or vertical booster, and a telemeter by itself. Optionally, link the databank you share with Helmsman by hand.
+- **Near a planet:** the ECU levels the ship, stops any drift, and hovers at `HoverHeight` over ground or water. From high up it falls no faster than `MaxFall` until the hovers see something. With a telemeter pointing down it can fall faster, up to `MaxFallTele`, and still slow down in time.
+- **Under water:** the ECU holds that exact spot with the engines.
+- **In space:** the ECU brakes to a stop.
+- **Fuel:** every minute it prints how long the fuel will last. When the tanks feeding the running engines have less than `LandMinutes` left, it lands slowly and switches off.
+
+The ECU never touches the AGG.
+
 ## Optional links: fuel, radar, switches, AGG, warp
 
 - **Fuel (no links needed):** every fuel tank on the construct is read through the core. The HUD shows a row per fuel type (ATMO / SPACE / ROCKET) with litres left, %, and a bar: green above 50%, amber from 20 to 50%, red below 20%. Litres come from each tank's weight; capacity comes from its size and tier, using DU's standard values. Set the tank owner's fuel talents once with `fueltalents A S R O C` (atmo, space and rocket tank handling, fuel tank optimization, container optimization, each 0-5; the old `fueltalents H O C` sets all three handlings to H). The values are saved to the databank and are also parameters. A `~` before the % means a tank holds more than those talents allow, so they're set too low. `fuel` lists every tank, to compare with DU's own refuel-tool readout.

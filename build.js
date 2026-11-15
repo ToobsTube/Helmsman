@@ -86,6 +86,59 @@ function parseHandlers(lua) {
   return handlers;
 }
 
+// ── Minify ── drop comments (except --export lines: DU builds the
+// parameter screen from those), indentation and blank lines. Lua-aware:
+// strings ("...", '...', [[...]], [=[...]=]) are copied untouched.
+// `node build.js --full` keeps everything (for reading the pasted code).
+function stripLua(code) {
+  let out = '', i = 0;
+  const n = code.length;
+  const longOpen = (at) => {             // "[", "=" * k, "[" → k, else -1
+    if (code[at] !== '[') return -1;
+    let j = at + 1, k = 0;
+    while (code[j] === '=') { j++; k++; }
+    return code[j] === '[' ? k : -1;
+  };
+  while (i < n) {
+    const c = code[i];
+    if (c === '-' && code[i + 1] === '-') {
+      const k = longOpen(i + 2);
+      if (k >= 0) {                      // --[[ long comment ]]
+        const close = ']' + '='.repeat(k) + ']';
+        const e = code.indexOf(close, i + 4 + k);
+        i = e < 0 ? n : e + close.length;
+        continue;
+      }
+      let e = code.indexOf('\n', i);
+      if (e < 0) e = n;
+      if (code.startsWith('--export', i)) out += code.slice(i, e);   // keep: parameters
+      i = e;
+      continue;
+    }
+    if (c === '"' || c === "'") {        // short string
+      let j = i + 1;
+      while (j < n && code[j] !== c && code[j] !== '\n') j += code[j] === '\\' ? 2 : 1;
+      out += code.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    const k = longOpen(i);
+    if (k >= 0) {                        // [[ long string ]]
+      const close = ']' + '='.repeat(k) + ']';
+      const e = code.indexOf(close, i + 2 + k);
+      const end = e < 0 ? n : e + close.length;
+      out += code.slice(i, end);
+      i = end;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  // Indentation and blank lines (newlines stay: statement boundaries and
+  // readable error line numbers are worth the few bytes).
+  return out.split('\n').map(l => l.trim()).filter(l => l !== '').join('\n');
+}
+
 function buildConf(handlers) {
   const indent = (code, n) => code.split('\n').map(l => (l.trim() === '' ? '' : ' '.repeat(n) + l)).join('\n');
   const bySlot = new Map();
@@ -129,8 +182,10 @@ if (lua.includes('\t')) throw new Error('Tabs found in source — YAML block sca
 const d = new Date(), p2 = n => String(n).padStart(2, '0');
 const STAMP = p2(d.getMonth() + 1) + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes());
 if (!/BUILD\s*=\s*"dev"/.test(lua)) throw new Error('BUILD = "dev" line missing in source');
+const FULL = process.argv.includes('--full');
 const handlers = parseHandlers(lua.replace(/BUILD(\s*)=(\s*)"dev"/, `BUILD$1=$2"${STAMP}"`));
-console.log(`Build stamp ${STAMP}`);
+if (!FULL) for (const h of handlers) h.code = stripLua(h.code);
+console.log(`Build stamp ${STAMP}${FULL ? '  (full, with comments)' : '  (minified: comments stripped, --export kept)'}`);
 
 fs.mkdirSync('dist', { recursive: true });
 for (const [file, text] of [[OUT_JSON, buildJson(handlers)], [OUT_CONF, buildConf(handlers)]]) {
