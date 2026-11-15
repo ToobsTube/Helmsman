@@ -36,7 +36,7 @@ BrakeSafety     = 0.8    --export: Fraction of max brake force the AP plans with
 AlignRate       = 0.5    --export: Max AP turn rate in rad/s. Lower it if a big ship overshoots when aligning.
 AutoEngagePaste = true   --export: Engage the AP immediately when you paste a ::pos{} into Lua chat.
 -- ── HUD ───────────────────────────────────────────────────────────
-HudTheme  = "cyan" --export: HUD colour theme: cyan, amber, green, red, purple, white, a hex colour like "#FF8800", or custom (uses AccentR/G/B). Live: hudtheme NAME
+HudTheme  = "cyan" --export: HUD colour theme: cyan, amber, green, red, purple, white, or a hex colour like "#FF8800". Live: hudtheme NAME
 HudOpacity = 0.9  --export: HUD panel opacity 0.3-1 (live: hud opacity N)
 HudScale  = 1     --export: Size of the bottom HUD (1 = compact default, 1.3 = bigger, 0.8 = smaller; live: hud scale N)
 HudShift  = 0     --export: Move the HUD bar sideways, % of screen width (negative = left, positive = right; live: hud shift N)
@@ -46,20 +46,16 @@ FlightHud = true  --export: Fighter-style attitude HUD in the centre of the scre
 FlightHudScale = 0.75 --export: Size of the fighter-style HUD (1 = large, 0.75 = default)
 HideDUWidget = true --export: Hide DU's own seat panel (throttle, cruise/travel) — the HUD shows the same info
 HideBuildHelper = true --export: Hide DU's BUILD HELPER bar at the top of the screen while seated (comes back when you get up)
-AccentR = 0    --export: Custom HUD accent (red 0-255), used when HudTheme = custom
-AccentG = 200  --export: Custom HUD accent (green 0-255)
-AccentB = 255  --export: Custom HUD accent (blue 0-255)
 CollisionWarn = true --export: Radar collision warning: a contact on or near your path shows on the HUD (red = too close to stop with brakes). Never flies the ship you're flying. Needs a linked radar
+AutoWarp      = false --export: Opt-in auto-warp. On: with a warp destination set on the map (scripts can't pick it) that is where the AP is going, the AP warps by itself when the drive reads READY, then carries on to the spot. Off = Helmsman never warps. Live: autowarp on/off
 CollisionStop = true --export: When the AUTOPILOT is flying toward a radar contact on its path, it stops short of it and hands back to you (Alt+1 carries on anyway). Manual flight is never taken over
 -- ── Flight feel (DU default values) ───────────────────────────────
 AutoLevel        = true  --export: Auto-level roll in atmosphere when you're not rolling
 BurnProtect      = true  --export: Hand flying in atmosphere: engine push fades out near the burn speed so you level off just under it (BURN LIMIT tag); brakes only if you go over it (e.g. diving). Steering and your throttle setting are never touched
 HoverHeight      = 10    --export: Hover height in metres when you press G to lift off (hover engines / vertical boosters)
 AutoLand         = true  --export: Surface targets: after stopping above the spot, the AP descends straight down (through the atmosphere, under the burn speed) and lands. Off = it stops above and waits for G
-MaxClimbAngle    = 45    --export: Optional, leave as is. The AP picks the climb angle itself (from thrust/weight, steeper if not climbing); this is only the upper limit (10-60°)
 PlanetTrips      = "atmo" --export: Surface spot on the SAME planet (with an atmosphere) while you're on it or in its air: "atmo" = take off and fly there inside the atmosphere (any distance), "orbit" = climb out and use the space route / orbit hop, "auto" = atmo up to AtmoHopMax, orbit beyond
 AtmoHopMax       = 100   --export: PlanetTrips "auto": furthest trip in km that stays in the atmosphere
-AtmoClimbAngle   = 45    --export: Optional, leave as is. Steepest climb angle for atmosphere trips. The AP already flattens the climb as the ship speeds up so it levels off at the cruise height; lower this only for a gentler-looking climb
 AtmoCruiseHeight = 3000  --export: Atmosphere trips: cruising altitude in metres above sea level. Raised automatically above the highest terrain / tallest allowed buildings, kept under the atmosphere top
 OrbitHop         = true  --export: Surface spot on the far side of the SAME planet with an atmosphere: fly a low orbit round the planet (orbital speed, mostly coasting) instead of the corner route. Moons and airless bodies always use the normal route at full speed
 DescentHeight    = 100   --export: AutoLand: the fast descent stops this many metres above the spot (when its altitude is known); below that it comes down slowly, still holding over the spot, until the hovers see the ground, then the normal landing does the rest. Lower = quicker (min 30)
@@ -67,19 +63,25 @@ GLandsDirect     = false --export: G while flying lands in one press. Off = G go
 StartMode        = 1     --export: Mode when you sit down. 1 = Flight, 2 = Maneuver (Alt+4 switches)
 LandSpeed        = 0     --export: Fastest landing descent in km/h. 0 = automatic: as fast as the ship's brakes + hovers can still stop within what they can see (weight and cargo included), up to 500 km/h and never over the burn speed. A number = your own limit (the sit-down report says if the ship can't really stop from it). Without hovers/boosters, TouchdownSpeed below the highest terrain
 TouchdownSpeed   = 15    --export: Landing speed in km/h for the last 2 m before touchdown (and the whole landing if no hover/booster is linked). Higher = quicker but harder touchdown
-FuelTankHandling     = 0   --export: Fuel tank handling talent level (0-5) of the tanks' owner: bigger tanks. Or type "fueltalents H O C" in Lua chat; saved to the databank.
+AtmoTankHandling     = 0   --export: Atmospheric fuel tank handling talent (0-5) of the tanks' owner: bigger tanks. Or "fueltalents A S R O C" in Lua chat; saved to the databank.
+SpaceTankHandling    = 0   --export: Space fuel tank handling talent (0-5)
+RocketTankHandling   = 0   --export: Rocket fuel tank handling talent (0-5)
 FuelTankOptimization = 0   --export: Fuel tank optimization talent level (0-5): lighter fuel
 ContainerOptimization = 0  --export: Container optimization talent level (0-5): lighter fuel
-FuelTierStep         = 1.5 --export: Leave at 1.5 unless the fuel % reads wrong
 LandSafety       = 0.3   --export: Share of the ship's spare stopping power a landing plans with. Lower = starts slowing higher, gentler (0.1-1). Tune live with "landsafety N" in Lua chat; saved to the databank.
 ManeuverSpeed    = 100   --export: Maneuver mode top speed in km/h (throttle / strafe / up-down are a fraction of this)
 pitchSpeedFactor = 0.8   --export
 yawSpeedFactor   = 1     --export
 rollSpeedFactor  = 1.5   --export
-brakeSpeedFactor = 3     --export
-brakeFlatFactor  = 1     --export
-torqueFactor     = 2     --export
-autoRollFactor   = 2     --export
+-- Fixed (were parameters; trimmed 2026-11-14 - the code is built around
+-- these values, and nobody changed them):
+brakeSpeedFactor = 3
+brakeFlatFactor  = 1
+torqueFactor     = 2
+autoRollFactor   = 2
+MaxClimbAngle    = 45     -- the AP picks the climb angle itself; upper limit
+AtmoClimbAngle   = 45     -- steepest climb on atmosphere trips (flattens with speed)
+FuelTierStep     = 1.5    -- tank capacity step per tier (verified)
 
 -- ── Local helpers (captured as upvalues by the global functions) ──
 local EPS, SU = 1e-6, 200000
@@ -253,9 +255,6 @@ function ApplyTheme(spec)
   if hex then
     a = { tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16) }
     ThemeName = "#"..hex:upper()
-  elseif s == "custom" then
-    a = { clamp(AccentR, 0, 255), clamp(AccentG, 0, 255), clamp(AccentB, 0, 255) }
-    ThemeName = "custom"
   else
     return false
   end
@@ -273,7 +272,24 @@ do  -- same saving rule as the numbers: export at default → use the saved one
   end
   if not ApplyTheme(want) then ApplyTheme("cyan") end
 end
-FuelTankHandling      = clamp(math.floor(persisted("sf_ft_handling", FuelTankHandling, 0)), 0, 5)
+-- Handling is a separate talent per fuel type. Atmo keeps the old key
+-- (sf_ft_handling); space / rocket start from it until set themselves.
+do
+  local oldH = DbGetNum("sf_ft_handling") or 0
+  local function per(key, exportVal)
+    if exportVal ~= 0 then DbSetNum(key, exportVal) return exportVal end
+    return DbGetNum(key) or oldH
+  end
+  TankH = {
+    atmo   = clamp(math.floor(persisted("sf_ft_handling", AtmoTankHandling, 0)), 0, 5),
+    space  = clamp(math.floor(per("sf_ft_handling_s", SpaceTankHandling)), 0, 5),
+    rocket = clamp(math.floor(per("sf_ft_handling_r", RocketTankHandling)), 0, 5),
+  }
+end
+function TalentsText()
+  return string.format("handling atmo %d · space %d · rocket %d · fuel tank opt %d · container opt %d",
+    TankH.atmo, TankH.space, TankH.rocket, FuelTankOptimization, ContainerOptimization)
+end
 FuelTankOptimization  = clamp(math.floor(persisted("sf_ft_fuelopt", FuelTankOptimization, 0)), 0, 5)
 ContainerOptimization = clamp(math.floor(persisted("sf_ft_contopt", ContainerOptimization, 0)), 0, 5)
 core, antigrav = foundCore, foundAgg
@@ -646,7 +662,7 @@ end
 --   capacity = base for the size × 1.5 per tier above basic × handling
 -- The core gives every tank's current mass and item; the item gives its
 -- empty mass, size and tier. Only the owner's fuel talents are unknown —
--- those are parameters ("fueltalents H O C"), saved to the databank.
+-- those are parameters ("fueltalents A S R O C"), saved to the databank.
 local FUEL_DENSITY = { atmo = 4, space = 6, rocket = 0.8 }     -- kg per litre, no talents
 local FUEL_BASE = {                                             -- litres at basic tier
   atmo   = { xs = 100, s = 400, m = 1600, l = 12800, xl = 25600, xxl = 51200 },
@@ -696,7 +712,7 @@ function TankFuel(t)
   local kg = (okM and tonumber(mass) or t.dry) - t.dry
   local massFactor = mmax(1 - 0.05 * (FuelTankOptimization + ContainerOptimization), 0.3)
   local litres = mmax(kg, 0) / (FUEL_DENSITY[t.kind] * massFactor)
-  local cap = t.cap0 * (1 + HANDLING_STEP[t.kind] * FuelTankHandling)
+  local cap = t.cap0 * (1 + HANDLING_STEP[t.kind] * (TankH[t.kind] or 0))
   local over = litres > cap * 1.02
   return litres, mmax(cap, litres), over
 end
@@ -745,8 +761,7 @@ end
 function PrintFuelInfo()
   ScanFuelTanks()
   ReadFuel()
-  system.print(string.format("[HELM] %d fuel tanks · talents: handling %d, fuel tank opt %d, container opt %d",
-    #FuelTankList, FuelTankHandling, FuelTankOptimization, ContainerOptimization))
+  system.print(string.format("[HELM] %d fuel tanks · talents: %s", #FuelTankList, TalentsText()))
   for _, t in ipairs(FuelTankList) do
     local v, m, over = TankFuel(t)
     local tte = TankTimeLeft(t.id, v)
@@ -1107,6 +1122,40 @@ function ReadWarp()
 end
 function IsWarping() return Warp.status == 3 or Warp.status == 4 end
 
+-- ── Auto-warp (opt-in: "autowarp on", for this session) ─────────────
+-- Carl's rule stands — Helmsman never warps unless asked. With it on, and
+-- a warp destination set on the map (scripts can't choose it) that is
+-- where the AP is going, the AP warps as soon as the drive says READY,
+-- and after the jump carries on to the spot (the existing warp resume).
+-- Does the map's warp destination match the AP's destination? By name
+-- (the planet / moon the AP is going to), or by distance within 10% for
+-- anything else (warp beacons).
+function WarpMatches()
+  if not (Warp.dest and AP.target) then return false end
+  local pos = vec3(construct.getWorldPosition())
+  local B = AP.surfB or NearestBody(AP.target)
+  if B and (AP.target - B.c):len() < B.r * 5 then
+    local wn, bn = Warp.dest:lower(), B.name:lower()
+    if wn == bn or wn:find(bn, 1, true) or bn:find(wn, 1, true) then return true end
+  end
+  if Warp.dist and Warp.dist > 0 then
+    local d = (AP.target - pos):len()
+    if mabs(Warp.dist - d) < d * 0.1 then return true end
+  end
+  return false
+end
+function AutoWarpTick()
+  if not (AutoWarp and WarpDrive and AP.active and AP.target) then return end
+  if AP.takeoff or AP.descent or AP.orbit or AP.parkTurn then return end
+  if AP.phase == "BRAKING" or AP.phase == "STOPPING" or AP.phase == "OBSTACLE" then return end
+  if Warp.status ~= 15 or not WarpMatches() then return end
+  if now() - (AutoWarpT or 0) < 10 then return end
+  AutoWarpT = now()
+  local ok = pcall(function() WarpDrive.initiate() end)
+  Msg(ok and ("Auto-warp → "..(Warp.dest or AP.name).." (the AP carries on after the jump — brake to cancel)")
+         or "Auto-warp: the warp drive wouldn't start — warp by hand")
+end
+
 -- (Warp is started by the game itself on its warp key, Alt+J; the
 -- script only shows the drive's state.)
 
@@ -1241,6 +1290,7 @@ function SurveyThrust()
   T.R, T.L = along('thrust analog lateral fueled', construct.getOrientationRight())
   T.U, T.D = along('thrust analog vertical fueled', construct.getOrientationUp())
   T.G = along('ground', construct.getOrientationUp())
+  T.K = along('rocket_engine', construct.getOrientationForward())   -- rockets (on/off boost, B)
   T.weight = construct.getMass() * vec3(core.getWorldGravity()):len()
   Thrust = T
   return T
@@ -1259,6 +1309,45 @@ function UpEngN(T)
   if T.atmo then n = n * clamp(unit.getAtmosphereDensity() or 0, 0, 1) ^ 2 end
   return n
 end
+-- Safe mass, ArchHUD's rule of thumb: half of what each set of engines /
+-- the brakes could hold against gravity here (2:1). The lowest one is the
+-- limit. Shown on the FLIGHT panel while landed / parked; "mass" lists all.
+local function fmtT(kg)
+  if kg >= 1e6 then return string.format("%.1f kt", kg / 1e6) end
+  return string.format("%.0f t", kg / 1000)
+end
+function SafeMass()
+  local C = construct
+  local pos = vec3(C.getWorldPosition())
+  local g = vec3(core.getWorldGravity()):len()
+  -- (AGG on: the reading drops toward 0 — use the planet's real pull)
+  local B = NearestBody(pos)
+  if B and B.gm and (pos - B.c):len() < B.hard + 1000 then g = mmax(g, B.gm / (pos - B.c):len() ^ 2) end
+  if g < 0.1 then g = 9.80665 end
+  local function ax(tags, dir)
+    local ok, t = pcall(C.getMaxThrustAlongAxis, tags, dir)
+    if ok and type(t) == "table" then return mabs(t[1] or 0), mabs(t[3] or 0) end
+    return 0, 0
+  end
+  local fA, fS = ax('thrust analog longitudinal', C.getOrientationForward())
+  local hA = ax('ground', C.getOrientationUp())
+  local list = {
+    { "atmo engines", 0.5 * fA / g }, { "space engines", 0.5 * fS / g },
+    { "hovers", 0.5 * hA / g }, { "brakes", 0.5 * (MaxBrakeN or 0) / g } }
+  local low
+  for _, e in ipairs(list) do if e[2] > 0 and (not low or e[2] < low[2]) then low = e end end
+  return low, list, C.getMass()
+end
+
+-- Rockets: on/off only, through DU's booster toggle (B does the same).
+RocketOn, RocketByAP, RocketTest = false, false, nil
+function SetRockets(on, msg)
+  if on == RocketOn then return end
+  Nav:toggleBoosters()
+  RocketOn, RocketByAP = on, on
+  if msg then Msg(msg) end
+end
+
 function PrintThrust()
   local T = SurveyThrust()
   -- "Up" = real up engines only. Hovers / vertical boosters only push
@@ -1267,7 +1356,8 @@ function PrintThrust()
   local upFull = mmax((T.U or 0) - (T.G or 0), 0)
   local hov = (T.G or 0) > 0 and (" (+ "..fmtN(T.G).." hover/VBoost, ground range only)") or ""
   system.print("[HELM] Thrust ("..(T.atmo and "atmo" or "space").."):  Fwd "..fmtN(T.F).." · Back "..fmtN(T.B)..
-    " · Left "..fmtN(T.L).." · Right "..fmtN(T.R).." · Up "..fmtN(upFull)..hov.." · Down "..fmtN(T.D))
+    " · Left "..fmtN(T.L).." · Right "..fmtN(T.R).." · Up "..fmtN(upFull)..hov.." · Down "..fmtN(T.D)..
+    ((T.K or 0) > 0 and (" · Rockets "..fmtN(T.K)) or ""))
   system.print("[HELM] Weight here "..fmtN(T.weight))
   if T.atmo and upFull > 0 and T.weight > 0 then
     local need = T.weight / upFull
@@ -1626,6 +1716,7 @@ function APDisengage(reason)
   BrakeLearnSave()
   AP.active, AP.phase, AP.accel, AP.brake, AP.angVel = false, "OFF", 0, 0, vec3()
   AP.descent, AP.takeoff, AP.orbit, AP.parkTurn = false, nil, nil, nil
+  if RocketByAP then SetRockets(false) end
   Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
   if reason then Msg("AP off — "..reason) end
 end
@@ -2861,6 +2952,33 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
         end
       end
     else T.sinkT = nil end
+    -- Rocket boost (ships with rockets): when the climb is struggling —
+    -- the check above that leads to CAN'T CLIMB — fire them; off again at
+    -- 92% of the burn speed (they can't be throttled, and Carl: "rockets
+    -- will get me to burn fairly quickly unless the ship is heavy"), once
+    -- climbing well, or when the climb ends. "rockets test" fires them on
+    -- the next climb on purpose. (The on/off governor idea is from
+    -- ArchHUD's rocket handling — Dodgin's; written our own way.)
+    if Thrust and (Thrust.K or 0) > 0 then
+      local capB = (inAtmo and B and (B.atm or 0) > 0) and BurnCap() / BURN_FRAC or 1e9
+      local struggling = T.sinkT and tNow - T.sinkT > 2
+      if RocketTest and vF > 30 and not T.rTest then T.rTest = tNow; RocketTest = nil end
+      local testing = T.rTest and tNow - T.rTest < 15
+      if not RocketOn then
+        if (struggling or testing) and speed < capB * 0.8 and tNow - (T.rOff or 0) > 3 then
+          SetRockets(true, struggling and "Climb struggling — rockets on (off near the burn speed or once climbing well)"
+                                     or "Rocket test — rockets on for up to 15 s")
+          T.rOn = tNow
+          if struggling then T.sinkT = tNow end      -- give them time before CAN'T CLIMB
+        end
+      elseif RocketByAP then
+        local why
+        if speed > capB * 0.92 then why = "near the burn speed"
+        elseif T.rTest and not testing then why = "test done"; T.rTest = nil
+        elseif not testing and T.rOn and tNow - T.rOn > 3 and vUp > 15 then why = "climbing well" end
+        if why then SetRockets(false, "Rockets off — "..why); T.rOff = tNow end
+      end
+    end
     -- Atmosphere trips: no steeper than the nose can come back down from
     -- (~3°/s) before the cruise height at today's speed — climbing on
     -- meanwhile at about half the current climb rate. So the climb is as
@@ -2978,6 +3096,7 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
   -- (not while the AGG carries the weight: wings asked for it too would
   -- lift the ship off the AGG height)
   AP.wingLift = (T.atmo and T.phase ~= "LIFT" and T.phase ~= "LINE UP" and not T.aggHold) and upW * glen or nil
+  if RocketByAP and T.phase ~= "CLIMB" then SetRockets(false, "Rockets off — climb done"); T.rOff = now() end
 end
 
 -- ── Orbit hop: far side of the same planet (atmosphere planets only) ──
@@ -3964,7 +4083,10 @@ function OnActionStart(a)
   elseif a == "speeddown" then
     if AP.active then APDisengage("throttle changed") end
     acm:updateCommandFromActionStart(axisCommandId.longitudinal, -5.0); releasePark()
-  elseif a == "booster" then Nav:toggleBoosters()
+  elseif a == "booster" then
+    -- (Helmsman keeps track, so the HUD tag and the AP's boost stay in step)
+    Nav:toggleBoosters()
+    RocketOn, RocketByAP = not RocketOn, false
   elseif a == "antigravity" then
     -- The pilot's toggle — the only thing in Helmsman that turns the AGG off.
     if antigrav then
@@ -4219,6 +4341,9 @@ function PrintHelp()
   system.print("agg N / agg here      AGG hover height (min "..AGG_MIN.." m, kept on the AGG) · agg = status")
   system.print("agg on / agg off      AGG on/off (same as Alt+G)")
   system.print("hdg · hdg N/here/off  nose heading · parking heading for this target (or |hdg=N after a ::pos)")
+  system.print("rockets · rockets test  rocket status · fire them on the next AP climb (test)")
+  system.print("mass                  mass and safe mass (2:1 rule): engines, hovers, brakes")
+  system.print("autowarp on / off     AP warps by itself when READY to its destination (this session)")
   system.print("fhud                  fighter-style attitude HUD on/off (Alt+6)")
   system.print("navinfo [on|off]      AUTOPILOT panel (target, ETA, brake distance)")
   system.print("farside               test: target the far side of the nearest planet")
@@ -4226,7 +4351,7 @@ function PrintHelp()
   system.print("autolevel on/off      auto-levelling (LEVEL tag shows when active)")
   system.print("fuel                  every tank: litres / capacity / %")
   system.print("radar                 radar contacts: size, distance, what DU tells us")
-  system.print("fueltalents H O C     your fuel talents 0-5: handling, fuel opt, container opt")
+  system.print("fueltalents A S R O C fuel talents 0-5: handling atmo/space/rocket, fuel opt, container opt")
   system.print("engines               list every engine type and its tags")
   system.print("speed N               AP cruise cap km/h (0 = max)")
   system.print("stopdist N            stop N metres short of target")
@@ -4283,7 +4408,7 @@ function OnInputText(text)
       if NavDB then pcall(NavDB.setStringValue, "sf_theme", ThemeName) end
       Msg("HUD theme: "..ThemeName..(NavDB and "  (saved)" or ""))
     else
-      Msg("HUD theme: "..ThemeName.."  —  hudtheme cyan | amber | green | red | purple | white | #RRGGBB | custom")
+      Msg("HUD theme: "..ThemeName.."  —  hudtheme cyan | amber | green | red | purple | white | #RRGGBB")
     end
   elseif lo == "settings" then
     -- Read only: what the databank holds, and what is in use now (the Lua
@@ -4303,7 +4428,9 @@ function OnInputText(text)
         { "Nav info",         onoff(sv("sf_navinfo")), NavInfo and "on" or "off" },
         { "AutoLevel",        onoff(sv("sf_autolevel")), AutoLevel and "on" or "off" },
         { "LandSafety",       sv("sf_landsafety"),  LandSafety },
-        { "Fuel tank handling",  sv("sf_ft_handling"), FuelTankHandling },
+        { "Atmo tank handling",  sv("sf_ft_handling"), TankH.atmo },
+        { "Space tank handling", sv("sf_ft_handling_s"), TankH.space },
+        { "Rocket tank handling", sv("sf_ft_handling_r"), TankH.rocket },
         { "Fuel optimization",   sv("sf_ft_fuelopt"),  FuelTankOptimization },
         { "Container optim.",    sv("sf_ft_contopt"),  ContainerOptimization },
         { "Brake strength (learned)", sv(PK("sf_brake_k3")), string.format("%.3f", BrakeK) },
@@ -4349,6 +4476,27 @@ function OnInputText(text)
     system.print(string.format("[HELM] %d linked · radars found %d", n, #Radars))
   elseif lo == "park" then if ParkHold then ParkRelease(nil) else ParkEngage() end
   elseif lo == "agg" or lo:match("^agg%s") then AggCommand(lo:match("^agg%s+(.-)%s*$"))
+  elseif lo == "autowarp" or lo == "autowarp on" or lo == "autowarp off" then
+    if not WarpDrive then Msg("No warp drive linked")
+    else
+      if lo ~= "autowarp" then AutoWarp = (lo == "autowarp on") end
+      Msg(AutoWarp and "Auto-warp ON (this session): the AP warps when the drive is READY and the map's warp destination is where it's going"
+                    or "Auto-warp off — warp by hand (the AP still carries on after a jump)")
+    end
+  elseif lo == "mass" then
+    local low, list, m = SafeMass()
+    Msg("Mass "..fmtT(m).." · safe mass (ArchHUD's 2:1 rule, gravity here):")
+    for _, e in ipairs(list) do
+      system.print(string.format("[HELM]   %-14s %s%s", e[1], e[2] > 0 and fmtT(e[2]) or "none",
+        (low and e == low) and "  ← the limit" or ""))
+    end
+    if low then system.print(string.format("[HELM]   %s", m > low[2] and ("over by "..fmtT(m - low[2]))
+      or ("room for about "..fmtT(low[2] - m).." more"))) end
+  elseif lo == "rockets" or lo == "rockets test" then
+    local K = Thrust and Thrust.K or 0
+    if K <= 0 then Msg("No rocket engines found on this ship")
+    elseif lo == "rockets test" then RocketTest = true; Msg("Rocket test armed — the next AP climb fires the rockets for up to 15 s (off near the burn speed)")
+    else Msg(string.format("Rockets %s · %s forward · the AP fires them when a climb struggles · B toggles by hand", RocketOn and "ON" or "off", fmtN(K))) end
   elseif lo == "hdg" or lo:match("^hdg%s") then
     -- hdg = which way the nose faces · hdg N / hdg here / hdg off = the
     -- current target's parking heading
@@ -4418,18 +4566,25 @@ function OnInputText(text)
   elseif lo == "engines" or lo == "tags" then PrintEngineTags()
   elseif lo == "fuelinfo" or lo == "fuel" then PrintFuelInfo()
   elseif lo:match("^fueltalents") then
-    local h, o, c = lo:match("^fueltalents%s+(%d)%s+(%d)%s+(%d)")
-    if h then
-      FuelTankHandling, FuelTankOptimization, ContainerOptimization =
-        clamp(tonumber(h), 0, 5), clamp(tonumber(o), 0, 5), clamp(tonumber(c), 0, 5)
-      DbSetNum("sf_ft_handling", FuelTankHandling)
+    -- A S R O C (handling per fuel type), or the old H O C (one handling for all)
+    local a, sp, r, o, c = lo:match("^fueltalents%s+(%d)%s+(%d)%s+(%d)%s+(%d)%s+(%d)")
+    if not a then
+      local h
+      h, o, c = lo:match("^fueltalents%s+(%d)%s+(%d)%s+(%d)%s*$")
+      a, sp, r = h, h, h
+    end
+    if a then
+      TankH.atmo, TankH.space, TankH.rocket = clamp(tonumber(a), 0, 5), clamp(tonumber(sp), 0, 5), clamp(tonumber(r), 0, 5)
+      FuelTankOptimization, ContainerOptimization = clamp(tonumber(o), 0, 5), clamp(tonumber(c), 0, 5)
+      DbSetNum("sf_ft_handling", TankH.atmo)
+      DbSetNum("sf_ft_handling_s", TankH.space)
+      DbSetNum("sf_ft_handling_r", TankH.rocket)
       DbSetNum("sf_ft_fuelopt", FuelTankOptimization)
       DbSetNum("sf_ft_contopt", ContainerOptimization)
       ReadFuel()
     end
-    Msg(string.format("Fuel talents: handling %d · fuel tank opt %d · container opt %d%s",
-      FuelTankHandling, FuelTankOptimization, ContainerOptimization,
-      h and (NavDB and "  (saved)" or "  (no databank — resets on restart)") or "  —  fueltalents H O C to change"))
+    Msg("Fuel talents: "..TalentsText()..
+      (a and (NavDB and "  (saved)" or "  (no databank — resets on restart)") or "  —  fueltalents A S R O C to change"))
   elseif lo == "radar" then
     PrintRadar()
   elseif lo == "thrust" then
@@ -4767,6 +4922,11 @@ function DrawHUD()
       w = w..string.format(' · cells %d/<span style="color:%s">%d</span>',
         Warp.need, Warp.cells >= Warp.need and '#5be37a' or '#ff5a5a', Warp.cells)
     end
+    if AutoWarp then
+      local m = AP.target and Warp.dest and WarpMatches()
+      w = w..(m and ' · <b style="color:#5be37a">AUTO</b>'
+              or ' · <b style="color:#ffc24b">AUTO: '..(AP.target and (Warp.dest and "not the AP's destination" or "set it on the map") or "no AP target")..'</b>')
+    end
     warpHtml = '<span class="keys" style="color:#d8e2ea">'..w..'</span>'
   end
   if StatusMsg ~= '' or warpHtml ~= '' then
@@ -4803,7 +4963,14 @@ function DrawHUD()
     local okT, t = pcall(unit.getThrottle)
     row("THROTTLE", string.format("%.0f%%", (okT and tonumber(t)) or 0))
   end
-  if showNav then row("BRAKE DIST", FormatDist(BrakeDist(speed, BrakeAccel(mass) / BrakeSafety))) end
+  -- Landed / parked: the brake distance row (0 m then) shows the safe mass
+  -- instead — the time you're loading cargo.
+  local safeLow = (not AP.active and speed < 1) and SafeMass() or nil
+  if safeLow then
+    local col = mass > safeLow[2] and "#ff3b3b" or mass > safeLow[2] * 0.9 and "#ffc24b" or nil
+    row("MASS · SAFE", (col and '<span style="color:'..col..'">' or '')..fmtT(mass).." · "..fmtT(safeLow[2])..
+      (col and '</span>' or '')..' <span class="k">('..safeLow[1]..')</span>')
+  elseif showNav then row("BRAKE DIST", FormatDist(BrakeDist(speed, BrakeAccel(mass) / BrakeSafety))) end
   if not showNav and AP.active then
     local thr = MaxThrustN > 0 and clamp(AP.accel * mass / MaxThrustN, 0, 1) or 0
     row("AP ALIGN · THRUST", string.format("%.1f° · %d%%", AP.alignErr, math.floor(thr*100 + 0.5)))
@@ -4829,6 +4996,7 @@ function DrawHUD()
   local okG, gear = pcall(unit.isAnyLandingGearDeployed)
   if okG and gear then tags[#tags+1] = '<b>GEAR</b>' end
   if LevelActive then tags[#tags+1] = '<u>LEVEL</u>' end
+  if RocketOn then tags[#tags+1] = '<b style="color:#ff5a5a">ROCKETS'..(RocketByAP and ' (AP)' or '')..'</b>' end
   if BurnLimitOn then tags[#tags+1] = '<b style="color:#ff9a3c">BURN LIMIT</b>' end
   if Mode == 2 and Thrust and Thrust.weight > 1 and Thrust.U < Thrust.weight then
     tags[#tags+1] = '<b style="color:#ff5a5a">UP THRUST &lt; WEIGHT</b>'
@@ -4974,6 +5142,7 @@ function FlightTick(id)
     ReadFuel()
     UpdateRadar()
     ReadWarp()
+    AutoWarpTick()
     AggTick()
     PollNavDB()
     APAdvanceLegs()
@@ -5031,10 +5200,10 @@ system.print("[HELM] Helmsman v"..VERSION.." (build "..BUILD..")"..
   "  |  warp="..(WarpDrive and "OK" or "none"))
 ScanFuelTanks()
 ReadFuel()
-system.print(string.format("[HELM] %d fuel tanks read (no links needed) · talents %d/%d/%d%s", #FuelTankList,
-  FuelTankHandling, FuelTankOptimization, ContainerOptimization,
-  (FuelTankHandling + FuelTankOptimization + ContainerOptimization == 0 and #FuelTankList > 0)
-    and "  —  set yours with: fueltalents H O C" or ""))
+system.print(string.format("[HELM] %d fuel tanks read (no links needed) · talents %d/%d/%d/%d/%d%s", #FuelTankList,
+  TankH.atmo, TankH.space, TankH.rocket, FuelTankOptimization, ContainerOptimization,
+  (TankH.atmo + TankH.space + TankH.rocket + FuelTankOptimization + ContainerOptimization == 0 and #FuelTankList > 0)
+    and "  —  set yours with: fueltalents A S R O C" or ""))
 UpdateRadar()
 ReadWarp()
 if WarpDrive then pcall(function() WarpDrive.hideWidget() end) end   -- HUD shows warp instead
