@@ -1456,6 +1456,20 @@ function HeadingOf(fwd, upW)
   return math.deg(math.atan(f:dot(e), f:dot(n))) % 360
 end
 
+-- The construct's centre of mass in world coordinates (nil if DU won't say).
+function ComWorld()
+  local C = construct
+  local ok, m = pcall(C.getWorldCenterOfMass)
+  if ok and type(m) == "table" and (m[1] or m.x) then return V(m) end
+  ok, m = pcall(C.getCenterOfMass)                 -- local: x right, y forward, z up
+  if ok and type(m) == "table" and (m[1] or m.x) then
+    m = V(m)
+    return vec3(C.getWorldPosition()) + vec3(C.getWorldOrientationRight()) * m.x
+         + vec3(C.getWorldOrientationForward()) * m.y + vec3(C.getWorldOrientationUp()) * m.z
+  end
+  return nil
+end
+
 function SetTarget(name, posStr, hdg)
   local descentR
   local aggPlan
@@ -1701,9 +1715,26 @@ function RollRate(err, fwd)
 end
 
 -- Yaw rate (about upW) wanted for a heading error (rad, + = turn left).
+-- Also never faster than it can stop from in the angle left: the yaw
+-- acceleration is learned as the ship spins up (heavy ships spin up
+-- slowly, so slow down early — the carrier's first line-up overshot
+-- before the softening above had anything to go on).
+local yawPrevW, yawPrevT
 function YawRate(err, upW, gain, cap)
   local k = SoftGain("yaw", err, upW, "Turn")
-  return clamp(err * gain * k, -cap * k, cap * k)
+  local w = vec3(construct.getWorldAngularVelocity()):dot(upW)
+  local tN = now()
+  if yawPrevT and tN - yawPrevT > 0.02 and tN - yawPrevT < 0.5 and mabs(w) > mabs(yawPrevW) then
+    local a = mabs(w - yawPrevW) / (tN - yawPrevT)
+    if a < 3 then YawAcc = mmax(YawAcc or 0, a) end
+  end
+  yawPrevW, yawPrevT = w, tN
+  local r = clamp(err * gain * k, -cap * k, cap * k)
+  if YawAcc and YawAcc > 0.002 then
+    local vs = msqrt(YawAcc * mabs(err))           -- stops in the angle left at half that acceleration
+    r = clamp(r, -vs, vs)
+  end
+  return r
 end
 
 -- ── Descent: hold point above a surface spot → straight down → landing ──
@@ -2129,6 +2160,29 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     return
   end
 
+  -- Parking heading with a turn in place at the end (AGG hold, or a
+  -- landing without the descent): a ship turns about its centre of mass,
+  -- so its position (what the spot was saved with) swings round that —
+  -- the carrier ended 64 m off the spot after turning (Carl, 1114-1403).
+  -- So the trip brings the CENTRE OF MASS to where it will be once the
+  -- ship faces the heading with its position on the spot; the turn then
+  -- leaves the position on the spot.
+  local refPos, aimDir = pos, nil
+  T.comOff = nil
+  if AP.hdg and AP.spot and B and (T.agg or not AutoLand or #GroundEngines == 0) then
+    local M = ComWorld()
+    if M then
+      local upS = norm(AP.spot - B.c)
+      local hv = HeadingVec(AP.hdg, upS)
+      if hv then
+        local d = M - pos
+        local Mf = AP.spot + hv:cross(upS) * d:dot(right) + hv * d:dot(fwd) + upS * d:dot(up)
+        refPos, aimDir = M, norm(Mf - B.c)
+        T.comOff = (d - upW * d:dot(upW)):len()
+      end
+    end
+  end
+
   -- Level heading toward the destination (keep ours if it's straight up).
   local fl = fwd - upW * fwd:dot(upW)
   fl = fl:len() > 0.05 and norm(fl) or norm(up - upW * up:dot(upW))
@@ -2139,7 +2193,8 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     -- its level part fell under the 0.1 cut-off and the take-off kept
     -- its old heading (flew the wrong way on a 1 km hop — sim).
     local S = AP.surfB
-    dT = norm(S.c + norm(AP.target - S.c) * (pos - S.c):len() - pos)
+    local aD = aimDir or norm(AP.target - S.c)
+    dT = norm(S.c + aD * (refPos - S.c):len() - refPos)
   end
   local h = dT - upW * dT:dot(upW)
   h = h:len() > 0.01 and norm(h) or fl
@@ -2153,9 +2208,9 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
   -- Atmosphere hop: distance over the ground to the spot, stop over it.
   local s, r, vUp, vH, vF, ab
   if T.atmo and (T.phase == "CLIMB" or T.phase == "CRUISE" or T.phase == "SLOWING") then
-    local dn = norm(AP.target - B.c)
+    local dn = aimDir or norm(AP.target - B.c)
     local rp
-    rp, r = norm(pos - B.c)
+    rp, r = norm(refPos - B.c)
     s = math.atan(rp:cross(dn):len(), rp:dot(dn)) * r
     vUp = vel:dot(upW)
     vH = vel - upW * vUp
@@ -2392,7 +2447,9 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     brake = 1
     local err = math.acos(clamp(fl:dot(h), -1, 1))
     local spin = vec3(construct.getWorldAngularVelocity()):len()
-    if (err < math.rad(3) and spin < 0.05) or now() - T.t0 > 30 then
+    -- (90 s: a big carrier can take a minute to come round; after 30 s it
+    -- set off still turning and banked the rest — Carl, 1114-1403)
+    if (err < math.rad(3) and spin < 0.05) or now() - T.t0 > 90 then
       -- No one-off radar path check here any more: a core's position and
       -- size class can't tell a flat pad from a tower, so it warned on
       -- every pad field (Carl, 2026-11-13: removed). The live collision
@@ -3000,6 +3057,15 @@ function APParkTurnStep(pos, vel, fwd, up, mass)
   end
   if done then
     AP.parkTurn = nil
+    -- How close the ship's position (what the spot was saved with) ended up.
+    if AP.spot and AP.surfB then
+      local upS = norm(AP.spot - AP.surfB.c)
+      local o = pos - AP.spot
+      local M = ComWorld()
+      local cm = M and (M - pos) or nil
+      system.print(string.format("[HELM] Parked %.1f m from the spot%s", (o - upS * o:dot(upS)):len(),
+        cm and string.format(" (centre of mass %.0f m from the ship's position)", (cm - upS * cm:dot(upS)):len()) or " (centre of mass unknown)"))
+    end
     PT.after()
   end
 end
