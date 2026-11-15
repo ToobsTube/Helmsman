@@ -1574,7 +1574,7 @@ function APEngage(allowTakeoff)
   local pos = vec3(construct.getWorldPosition())
   -- AGG trip? Only from inside the same planet's atmosphere (a trip from
   -- space or another planet arrives the normal way).
-  AP.agg = nil
+  AP.agg, AP.aggDescent = nil, nil
   if AP.surfB then
     local B = AP.surfB
     if NearestBody(pos) == B and (pos - B.c):len() < (B.atm or 0) then
@@ -1789,7 +1789,28 @@ function StartDescent()
   ParkBrake = false
   Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
   local B = AP.surfB
-  local h = (vec3(construct.getWorldPosition()) - B.c):len() - AP.descentR
+  local r0 = (vec3(construct.getWorldPosition()) - B.c):len()
+  -- Arriving from space / another planet with the AGG on: the descent
+  -- stops at the AGG height over the spot and holds there, no landing
+  -- (decided here, at the start of the descent — the AGG may have been
+  -- switched during the trip). Same rules as an AGG trip on the planet.
+  AP.aggDescent = nil
+  if not AP.agg then
+    local ag, why = AggTripPlan(B, AP.spotR, AP.mapPick)
+    if ag and r0 > ag.R + 50 then
+      AP.agg, AP.aggDescent = ag, true
+      local note = ""
+      if ag.base and mabs(ag.base - ag.alt) > 20 then
+        note = string.format(" (the AGG's lift is still at %.0f m, creeping toward %.0f m)", ag.base, ag.alt)
+      end
+      Msg(string.format("AGG on — descending to the AGG height over %s: stops at %.0f m (%s down) and holds, no landing%s — brake to stop",
+        AP.name, ag.alt, FormatDist(r0 - ag.R), note))
+      return
+    elseif why then
+      Msg("AGG on, but landing: "..why)
+    end
+  end
+  local h = r0 - AP.descentR
   if h > 5 then
     Msg("Descending to "..AP.name.." ("..FormatDist(h).." down) — brake to stop")
   else
@@ -1805,14 +1826,91 @@ function APDescentStep(pos, vel, fwd, up, mass)
   local glen = g:len()
   local rel = pos - B.c
   local dn = norm(B.c - pos)                     -- straight down
-  local goal = rel:len() - AP.descentR           -- metres of fast descent left
+  -- AGG arrival: the descent ends AT the AGG height and holds there.
+  local aggD = AP.aggDescent and AP.agg
+  local goal = rel:len() - (aggD and AP.agg.R or AP.descentR)   -- metres of fast descent left
   local vDown = vel:dot(dn)
   local hSpeed = (vel - dn * vDown):len()
-  -- Braking while falling: brakes minus gravity.
-  local ab = mmax(BrakeAccel(mass) - glen, 0.3)
+  -- Braking while falling: brakes minus gravity. (AGG on: the gravity
+  -- reading drops near the lift height — plan with the planet's real pull
+  -- from the atlas, or it would come in too fast for the AGG height.)
+  local gB = glen
+  if aggD and B.gm then gB = mmax(glen, B.gm / (rel:len() ^ 2)) end
+  local ab = mmax(BrakeAccel(mass) - gB, 0.3)
   local vmax = BrakeVmax(mmax(goal, 0), ab)
   if (B.atm or 0) > 0 then vmax = mmin(vmax, BurnCap()) end
   vmax = mmin(vmax, CruiseCap())
+  -- AGG arrival: there's no slow final stretch to soak up an overshoot —
+  -- the stop itself has to be AT the AGG height (Carl, 1114-1855: fell a
+  -- bit past it). Atmospheric brakes fade at low speed and lag, so the
+  -- fast part plans to stop 40 m above it with 80% of the brakes, then the
+  -- last 40 m close in proportion (10 m/s at 40 m, 1 m/s at 4 m).
+  if aggD then
+    -- Atmospheric brakes fade below ~100 m/s (in proportion to speed), so
+    -- with full brakes the fall settles at a FLOOR speed where they only
+    -- match gravity (Carl: full brakes by hand never got under ~50 km/h
+    -- until the AGG started helping). Brakes alone can't stop at the AGG
+    -- height — the AGG makes the catch. So: arrive as slowly as the brakes
+    -- allow. Plan the slowing with the fade (a(v) = A·min(1, v/100) − g),
+    -- reach the floor speed 80 m above the AGG height, then full brakes
+    -- the rest of the way down into the AGG.
+    local DA = AP.descentHold or {}
+    AP.descentHold = DA
+    local A = mmax(BrakeAccel(mass), 0.5) * 0.8          -- full-speed braking, 20% spare
+    local tN = now()
+    -- Learn the real figure while the brakes are full on, high enough that
+    -- the AGG isn't helping yet: A = (fall slowing + g) / fade.
+    -- (over 0.25 s windows: frames are ~16 ms apart, and the old 50 ms
+    -- minimum meant it never measured at all — 1114-2016 "DU's figure")
+    if (DA.pB or 0) >= 0.95 and vDown > 5 and goal > 150 then
+      if not DA.mT then
+        DA.mT, DA.mV = tN, vDown
+      elseif tN - DA.mT >= 0.25 then
+        local an = (DA.mV - vDown) / (tN - DA.mT)
+        local vAvg = (DA.mV + vDown) / 2
+        local Am = (an + gB) / mmax(mmin(1, vAvg / 100), 0.05)
+        if Am > 0 and Am < 500 then DA.Am = DA.Am and (DA.Am * 0.7 + Am * 0.3) or Am end
+        DA.mT, DA.mV = tN, vDown
+      end
+    else
+      DA.mT = nil
+    end
+    DA.pB = AP.brake or 0
+    -- Measured beats DU's figure either way: DU's was 3x too LOW on the
+    -- Hammer Crest (it said a 139 km/h floor; Carl's real one is ~50).
+    if DA.Am then A = DA.Am * 0.9 end
+    DA.A = A
+    local vF = 100 * gB / mmax(A, 0.1)                   -- floor speed: brakes = gravity
+    local vEnd = mmax(vF * 1.15, 3)
+    DA.vF = vF
+    if goal <= 100 and not DA.v100 then DA.v100 = vDown end
+    -- Distance to slow from v to vEnd with fading brakes (numeric).
+    local function slowDist(v)
+      if v <= vEnd then return 0 end
+      local n, d = 16, 0
+      local dv = (v - vEnd) / n
+      for i = 0, n - 1 do
+        local vm = vEnd + (i + 0.5) * dv
+        local a = A * mmin(1, vm / 100) - gB
+        if a <= 0.05 then return 1e9 end
+        d = d + vm * dv / a
+      end
+      return d
+    end
+    local room = goal - 80
+    if room <= 0 then
+      vmax = 0                                           -- last 80 m: full brakes into the AGG
+    else
+      local lo, hi = vEnd, mmax(vmax, vEnd)
+      if slowDist(hi) > room then
+        for _ = 1, 12 do
+          local mid = (lo + hi) / 2
+          if slowDist(mid) > room then hi = mid else lo = mid end
+        end
+        vmax = lo
+      end
+    end
+  end
   -- Short drops: near the bottom, hold the fall until we're over the spot
   -- (a 1 km hop has only ~50 m of drop; the creep across hadn't finished).
   local offNow = (rel - norm(AP.target - B.c) * rel:dot(norm(AP.target - B.c))):len()
@@ -1821,7 +1919,7 @@ function APDescentStep(pos, vel, fwd, up, mass)
   -- the ground, the position hold doesn't stop at DescentHeight — it goes
   -- on, slowly, until the ground is in sensor range. The plain landing
   -- below it has no position hold (drifted ~11 m in 100 m, build 2231).
-  local final = #GroundEngines > 0 and goal <= 5
+  local final = #GroundEngines > 0 and goal <= 5 and not aggD
   if final then
     local gR = mmax(GroundRangeSeen or 15, 10)
     if AP.spotR then
@@ -1874,6 +1972,9 @@ function APDescentStep(pos, vel, fwd, up, mass)
   -- Only as much brake as the fall needs: full brakes to hold height also
   -- killed the sideways creep to the spot (0.3 m/s, landed 30 m off — sim).
   if vDown > vmax + 1 then brake = (vmax > 30) and 1 or clamp((vDown - vmax) / 4, 0.1, 1) end
+  -- (AGG arrival: catch the sink sooner and firmer near the bottom — weak
+  -- low-speed brakes nudged at 10% let it slide past the height)
+  if aggD and vDown > vmax + 0.3 then brake = mmax(brake, clamp((vDown - vmax) / 1.5, 0.2, 1)) end
   -- Position hold over the spot, all the way down. The idea of steering
   -- for the spot through the whole drop comes from SagaHUD by Sagacious
   -- (Carl: "SAGA would practically hold the line in the middle of the
@@ -1901,7 +2002,15 @@ function APDescentStep(pos, vel, fwd, up, mass)
   -- (final stretch: tighter, it's slow by then)
   if offLen > (final and 2.5 or 5) then D.steer = true elseif offLen < (final and 1 or 2) then D.steer = false end
   local excess = vH - vHdes
-  if not D.steer then
+  -- Brakes act on the WHOLE velocity: braking a 0.5 m/s slide while
+  -- falling 22 m/s mostly brakes the fall, and the drop crawled down from
+  -- 12 km at 80 km/h with the brakes at 12% (Carl, 1114-1951). So slide
+  -- braking only once the fall is slow, or the slide is a real share of
+  -- the motion; above that the belly tilt does the steering.
+  local sideBrake = vDown < 8 or vH:len() > vDown * 0.3
+  if not sideBrake then
+    -- (no slide braking while falling fast)
+  elseif not D.steer then
     -- Over the spot: stop any leftover slide (coasting past at ~2.5 m/s
     -- made it turn right round to come back — sim).
     if vH:len() > 0.3 then brake = mmax(brake, clamp(vH:len() / 2, 0.1, 1)) end
@@ -1911,7 +2020,8 @@ function APDescentStep(pos, vel, fwd, up, mass)
   local e = vHdes - vH
   AP.remaining, AP.vAlong, AP.vDes = goal, vDown, vmax
   -- Nose level (pitch + roll to the horizon); yaw toward the push needed.
-  local wv = glen > 0.01 and g / glen or dn
+  -- (AGG on: the gravity reading can point anywhere — planet centre)
+  local wv = (glen > 0.01 and not AggIsOn()) and g / glen or dn
   local upW = -wv
   local pitchAng = math.asin(clamp(fwd:dot(wv), -1, 1))
   local right = vec3(construct.getWorldOrientationRight())
@@ -1925,14 +2035,19 @@ function APDescentStep(pos, vel, fwd, up, mass)
   -- out near the bottom too). Any direction: no turning needed for it.
   -- Safety: if it ever drifts 25 m further off than where tilting began,
   -- the tilt isn't working on this ship — level nose for the rest.
-  if D.steer and not D.noTilt then
+  -- Only in air thick enough for the tilt to push the ship sideways (Carl:
+  -- it needs ~10%): above that, level nose, and no judging the tilt —
+  -- the drift up there switched it off for the whole descent (1114-2016).
+  local airOk = (unit.getAtmosphereDensity() or 0) >= 0.1
+  if not airOk then D.tiltOff0 = nil end
+  if D.steer and not D.noTilt and airOk then
     D.tiltOff0 = mmin(D.tiltOff0 or offLen, offLen)
     if offLen > D.tiltOff0 + 25 then
       D.noTilt = true
       Msg("Belly tilt isn't bringing it closer — flying the rest nose-level")
     end
   end
-  if D.steer and not D.noTilt and e:len() > 0.3 and vDown > 1 then
+  if D.steer and not D.noTilt and airOk and e:len() > 0.3 and vDown > 1 then
     local tilt = clamp((e:len() - 0.3) * math.rad(3), 0, math.rad(final and 8 or 20))
     local tdir = e / e:len()
     local uDes = upW * math.cos(tilt) - tdir * math.sin(tilt)   -- belly (−up) leans toward tdir
@@ -1990,6 +2105,24 @@ function APDescentStep(pos, vel, fwd, up, mass)
   -- engines can already see the ground (spot higher than we thought).
   local seesGround = #GroundEngines > 0 and ReadGroundDist() >= 0
   local handOver
+  if aggD then
+    -- At the AGG height, over the spot, facing the heading: hold there.
+    D0.minGoal = mmin(D0.minGoal or goal, goal)
+    -- (or the AGG has caught it a little above the height — its lift may
+    -- not be exactly there — and holds it still for 3 s)
+    if goal <= 80 and mabs(vDown) < 0.5 then D0.stillT = D0.stillT or now() else D0.stillT = nil end
+    local held = D0.stillT and now() - D0.stillT > 3
+    if (goal <= 5 and mabs(vDown) < 1 or held) and offNow <= 4 and hdgOk then
+      local low = D0.minGoal
+      AP.descent = false
+      AggArrive()
+      system.print(string.format("[HELM] AGG stop: %s · %s 100 m above · full-brake floor ~%.0f km/h (brakes %.0f m/s²%s)",
+        low < -0.5 and string.format("dipped %.0f m below the AGG height", -low) or "no dip below the AGG height",
+        D0.v100 and string.format("%.0f km/h", D0.v100 * 3.6) or "?",
+        (D0.vF or 0) * 3.6, D0.A or 0, D0.Am and ", measured" or ", DU's figure"))
+    end
+    return
+  end
   if final then
     -- over the spot (or the ground is close anyway), or far below the
     -- spot height we were given (it was wrong): the landing takes over
@@ -2169,7 +2302,7 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
   -- leaves the position on the spot.
   local refPos, aimDir = pos, nil
   T.comOff = nil
-  if AP.hdg and AP.spot and B and (T.agg or not AutoLand or #GroundEngines == 0) then
+  if AP.hdg and AP.spot and B and AP.surfB == B and (T.agg or not AutoLand or #GroundEngines == 0) then
     local M = ComWorld()
     if M then
       local upS = norm(AP.spot - B.c)
@@ -2187,7 +2320,11 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
   local fl = fwd - upW * fwd:dot(upW)
   fl = fl:len() > 0.05 and norm(fl) or norm(up - upW * up:dot(upW))
   local dT = norm(AP.target - pos)
-  if AP.surfB then
+  -- (only for a spot on the planet we're leaving: for one on ANOTHER
+  -- planet that point is a planet-sized distance off to the side, and the
+  -- take-off headed 90° away from the destination — Carl, 1114-1951,
+  -- both ways between Alioth and Alioth Prime)
+  if AP.surfB and AP.surfB == B then
     -- Surface spot: steer for the spot at our own height, not the hold
     -- point 10+ km above it — from 1 km away that's nearly straight up,
     -- its level part fell under the 0.1 cut-off and the take-off kept
