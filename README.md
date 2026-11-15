@@ -52,14 +52,14 @@ This produces both install formats from the same source:
 ## Install
 
 ### Option A: paste (recommended, and the one to use for DRM ships)
-1. Link the **core unit** to the seat or remote controller. Optionally also link: the **databank shared with Navigator**, the **anti-grav generator**, **one hover or vertical booster** (lets landings read the distance to the ground), **radar(s)**, the **warp drive**, and any **manual switch** for cabin automation. Any slot, any order works, because the script identifies each element by class at startup.
+1. Link the **core unit** to the seat or remote controller. Optionally also link: the **databank shared with Navigator**, the **anti-grav generator**, **one hover or vertical booster** (lets landings read the distance to the ground), a **telemeter pointing down** (sees ~100 m: faster landings onto unknown ground), **radar(s)**, the **warp drive**, and any **manual switch** for cabin automation. Any slot, any order works, because the script identifies each element by class at startup.
 2. Open `Helmsman_v0.1.txt`, copy everything, then right-click the seat → *Advanced* → *Paste Lua configuration from clipboard*.
 
 ### Option B: autoconfigure
 1. Copy `Helmsman_v0.1.conf` to `...\Dual Universe\Game\data\lua\autoconf\custom\`
 2. Right-click the seat → *Advanced* → *Run custom autoconfigure* → **Helmsman v0.1**.
 
-   **Linked automatically:** core, anti-grav generator, vertical boosters, hovers, warp drive.
+   **Linked automatically:** core, anti-grav generator, vertical boosters, hovers, telemeter, warp drive.
 
    **Link by hand afterwards** (only the ones you use):
    - the **databank shared with Navigator**
@@ -86,7 +86,8 @@ Either way, sit down and check the Lua console:
 - **Safe mass:** while landed or stopped, the FLIGHT panel's brake-distance row shows `MASS · SAFE` (mass now · safe mass, and what limits it). Safe mass uses ArchHUD's rule of thumb: half of what the atmo engines, space engines, hovers or brakes could hold against gravity here (2:1), and the lowest one counts. Amber within 10%, red when over. Chat: `mass` lists all four and how much room is left.
 - **Rockets:** B fires and stops them by hand, as in the stock script; the HUD shows a red ROCKETS tag while they're on, and the sit-down thrust line lists their thrust. During an AP climb, if the climb is struggling (the check behind CAN'T CLIMB), the AP fires them, and turns them off again at 92% of the burn speed, once the ship is climbing well, or when the climb ends. Chat: `rockets` shows their status; `rockets test` makes the next AP climb fire them for up to 15 s.
 - **Down push on descents:** on a landing or AGG arrival from high up, engines that face up (the thrust line's "Down" figure) push the fall up to the speed the braking plan allows, then stop. They're never used while braking or in the slow final stretch. The braking plan and burn-speed cap are unchanged.
-- **Water:** hovers and vertical boosters see the water surface, but a ship can't settle on it. When a landing (G or AutoLand) touches the surface near sea level and keeps sinking, Helmsman switches to hover, and the ship floats HoverHeight above the water. Press G there to sink and land on the bottom. A beach at sea level stops the ship, so it lands as normal.
+- **Water:** hovers and vertical boosters see the water surface, but a ship can't settle on it. When a landing (G or AutoLand) touches the surface near sea level and keeps sinking, Helmsman switches to hover, and the ship floats HoverHeight above the water with the brakes held so it doesn't drift. Press G there to sink and land on the bottom. A spot saved under water (below sea level) skips the stop and sinks straight to it. A beach at sea level stops the ship, so it lands as normal.
+- **Telemeter (optional):** hovers see the ground only ~15 m down, so a landing onto a map pick (ground height unknown) comes down at about 50 km/h. A telemeter mounted pointing straight down sees ~100 m, so it can come down much faster and still stop in time. Helmsman uses a telemeter only after a reading shows it pointing down, for example while parked when you sit down.
 - **Parking heading:** add `|hdg=N` after a `::pos{}` (pasted, or from Navigator) and the ship parks facing that way: N is a compass heading in degrees, 0 = north (toward the planet's pole, the axis `::pos` latitude uses), 90 = east. A landing holds the heading all the way down, so it has turned while still high up, and doesn't go below the fast descent's end (DescentHeight over the spot) until it faces it. An AGG trip, or a landing without the descent, turns in place over the spot on the brakes before holding or setting down. It gives up after 60 s and says so. Chat: `hdg` shows which way the nose faces; `hdg N`, `hdg here` or `hdg off` set the current target's parking heading.
 - **Warp drive (auto-linked by the `.conf`; link it yourself for the paste install):** pick the destination on the in-game map as usual. A single WARP line under the key hints shows the drive's status (READY / cooling down / planet too close / not enough cells / no destination…), the destination and distance, and warp cells needed / aboard (red if not enough). Jump with the game's own warp key (Alt+J) as usual; the script only displays warp info. While DU is warping, the script stops all engine and brake commands so it never fights the jump. If the AP was flying when the warp started, it resumes by itself about a second after you drop out (press brake during the warp to cancel that).
 
@@ -139,7 +140,7 @@ The HUD look (theme, scale, position, opacity), Flight HUD / nav info / AutoLeve
 |---|---|---|
 | CustomAtlas | atlas | Atlas file for your server (see above) |
 | MaxCruiseSpeed | 0 | AP speed cap in km/h (0 = ship max) |
-| StopDistance | 1000 | Stop this many metres short of the target |
+| StopDistance | 1000 | Targets in space only: stop this many metres short. Spots on a planet or moon always stop right over the spot |
 | PlanetClearance | 10000 | Margin kept outside atmosphere/terrain when routing |
 | BrakeSafety | 0.8 | Fraction of brake force planned with (lower = brake earlier) |
 | AlignRate | 0.5 | Max AP turn rate, rad/s (lower for big ships) |
@@ -159,7 +160,7 @@ The HUD look (theme, scale, position, opacity), Flight HUD / nav info / AutoLeve
 | CollisionWarn | true | Radar collision warning on the HUD (warning only) |
 | CollisionStop | true | AP stops short of a radar contact on its path and hands back to you. Manual flight is never taken over |
 | AutoWarp | false | Opt-in auto-warp: with a warp destination set on the map that is where the AP is going, the AP warps when the drive reads READY, then carries on. Live: `autowarp on/off` |
-| HudTheme | cyan | Colour theme: cyan, amber, green, red, purple, white, or `#RRGGBB`. Live: `hudtheme NAME`, saved |
+| HudTheme | cyan | Colour theme: cyan, amber, green, red, purple, white, or `#RRGGBB`. Saved on the databank: while this is left at `cyan`, the saved colour is used, so a ship you bought may show its previous owner's colour. Change it in chat with `hudtheme NAME` (`hudtheme cyan` for the default) |
 | HudOpacity | 0.9 | Panel opacity 0.3-1. Live: `hud opacity N`, saved |
 | HudScale / HudShift / HudBottom | 1 / 0 / 7 | Live: `hud scale N`, `hud shift N`, `hud bottom N`, all saved. Size of the compact bottom HUD (1 = default, 0.8 smaller, 1.3 bigger), sideways nudge (% of screen, negative = left), distance from the bottom (% of screen height) |
 | NavInfo | true | AUTOPILOT panel (target, ETA, brake distance). Turn it off if you'd rather watch Navigator's screen; the AP phase then shows as a badge in FLIGHT. Live: `navinfo on/off`, saved |
@@ -169,6 +170,9 @@ The HUD look (theme, scale, position, opacity), Flight HUD / nav info / AutoLeve
 | AutoLevel | true | Auto-levelling (only while hovering/landing, or in atmosphere). A LEVEL tag shows whenever it's acting. `autolevel on/off`; saved |
 | HideDUWidget | true | Hide DU's own seat panel; the HUD's FLIGHT panel shows throttle / cruise instead |
 | HideBuildHelper | true | Hide DU's BUILD HELPER bar at the top of the screen while seated; it comes back when you get up |
+| pitchSpeedFactor | 0.8 | Hand flying: how fast the nose pitches with your pitch keys (0.8 ≈ 46°/s). Lower is gentler, higher is snappier |
+| yawSpeedFactor | 1 | Hand flying: how fast the ship yaws with your yaw keys (1 ≈ 57°/s) |
+| rollSpeedFactor | 1.5 | Hand flying: how fast the ship rolls with your roll keys (1.5 ≈ 86°/s). Your roll input still counts while the AP flies |
 
 ## How the autopilot flies
 

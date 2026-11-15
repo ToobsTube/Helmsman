@@ -30,13 +30,13 @@ CustomAtlas = "atlas"  --export: Atlas file for your server. "atlas" = game defa
 
 -- ── Autopilot ─────────────────────────────────────────────────────
 MaxCruiseSpeed  = 0      --export: AP cruise speed cap in km/h. 0 = use the ship's max speed.
-StopDistance    = 1000   --export: How far short of the target (m) the autopilot comes to a full stop.
+StopDistance    = 1000   --export: Targets in space only: how far short (m) the AP stops. Spots on a planet or moon always stop right over the spot
 PlanetClearance = 10000  --export: Extra margin (m) kept outside atmospheres/surfaces when routing around planets.
 BrakeSafety     = 0.8    --export: Fraction of max brake force the AP plans with. Lower = starts braking earlier.
 AlignRate       = 0.5    --export: Max AP turn rate in rad/s. Lower it if a big ship overshoots when aligning.
 AutoEngagePaste = true   --export: Engage the AP immediately when you paste a ::pos{} into Lua chat.
 -- ── HUD ───────────────────────────────────────────────────────────
-HudTheme  = "cyan" --export: HUD colour theme: cyan, amber, green, red, purple, white, or a hex colour like "#FF8800". Live: hudtheme NAME
+HudTheme  = "cyan" --export: HUD colour theme: cyan, amber, green, red, purple, white, or a hex colour like "#FF8800". Saved on the databank: left at "cyan", the saved colour is used (a bought ship may show its old owner's). Change it in chat: hudtheme NAME (hudtheme cyan for the default)
 HudOpacity = 0.9  --export: HUD panel opacity 0.3-1 (live: hud opacity N)
 HudScale  = 1     --export: Size of the bottom HUD (1 = compact default, 1.3 = bigger, 0.8 = smaller; live: hud scale N)
 HudShift  = 0     --export: Move the HUD bar sideways, % of screen width (negative = left, positive = right; live: hud shift N)
@@ -70,9 +70,9 @@ FuelTankOptimization = 0   --export: Fuel tank optimization talent level (0-5): 
 ContainerOptimization = 0  --export: Container optimization talent level (0-5): lighter fuel
 LandSafety       = 0.3   --export: Share of the ship's spare stopping power a landing plans with. Lower = starts slowing higher, gentler (0.1-1). Tune live with "landsafety N" in Lua chat; saved to the databank.
 ManeuverSpeed    = 100   --export: Maneuver mode top speed in km/h (throttle / strafe / up-down are a fraction of this)
-pitchSpeedFactor = 0.8   --export
-yawSpeedFactor   = 1     --export
-rollSpeedFactor  = 1.5   --export
+pitchSpeedFactor = 0.8   --export: Hand flying: how fast the nose pitches with your pitch keys (0.8 ≈ 46°/s). Lower = gentler, higher = snappier
+yawSpeedFactor   = 1     --export: Hand flying: how fast the ship yaws with your yaw keys (1 ≈ 57°/s)
+rollSpeedFactor  = 1.5   --export: Hand flying: how fast the ship rolls with your roll keys (1.5 ≈ 86°/s). Also used for your roll input while the AP flies
 -- Fixed (were parameters; trimmed 2026-11-14 - the code is built around
 -- these values, and nobody changed them):
 brakeSpeedFactor = 3
@@ -121,6 +121,7 @@ GroundEngines = {}   -- linked vertical boosters / hovers: used only to read gro
 Radars        = {}   -- linked radars (atmo and/or space)
 WarpDrive     = nil  -- linked warp drive (destination is chosen on the in-game map)
 Switches      = {}   -- linked manual switches: ON while seated, OFF on leaving (like ArchHUD)
+Telemeters    = {}   -- linked telemeters: a DOWN-facing one sees the ground ~100 m off
 -- (Fuel tanks need no links — every tank is read through the core.)
 -- The same element can appear under two names (e.g. .conf name + slotN).
 local seen = {}
@@ -133,6 +134,7 @@ for _, e in pairs({core, navdb, navdb_1, navdb_2, antigrav, antigrav_1,
                    vBooster, vBooster_1, vBooster_2, vBooster_3, vBooster_4,
                    hover, hover_1, hover_2, hover_3, hover_4,
                    radar, radar_1, radar_2, warpdrive, warpdrive_1, switch, switch_1, switch_2,
+                   telemeter, telemeter_1, telemeter_2,
                    slot1, slot2, slot3, slot4, slot5, slot6, slot7, slot8, slot9, slot10,
                    slot11, slot12, slot13, slot14, slot15, slot16, slot17, slot18, slot19, slot20,
                    slot21, slot22, slot23, slot24, slot25}) do
@@ -144,6 +146,7 @@ for _, e in pairs({core, navdb, navdb_1, navdb_2, antigrav, antigrav_1,
   elseif c:find("verticalbooster") or c:find("hovercraft") or c:find("hover") then addOnce(GroundEngines, e)
   elseif c:find("databank") then addOnce(banks, e)
   elseif c:find("manualswitch") then addOnce(Switches, e)
+  elseif c:find("telemeter") then addOnce(Telemeters, e)
   end
 end
 -- Seat-linked manual switches go ON when you sit down and OFF when you get
@@ -398,6 +401,9 @@ end
 
 -- Re-arm stabilization after Space/C only if we're hovering.
 function RestoreGroundStab()
+  -- (under water: never — the hovers read 0 there and DU's hold drives
+  -- them flat out for the surface: "let go of C and it shoots up", Carl)
+  if UnderwaterNow then return end
   if HoverState == "hover" then
     Nav.axisCommandManager:activateGroundEngineAltitudeStabilization(Nav:getTargetGroundAltitude())
   end
@@ -431,6 +437,64 @@ function ReadGroundDist()
   end
   GroundDist = best
   return best
+end
+
+-- Telemeter pointing DOWN: sees the ground ~100 m off (hovers ~15 m), so
+-- a landing onto unknown ground (map picks) can come down much faster.
+-- Which way a telemeter points isn't known from its link, so one only
+-- counts once a hit lands straight below the ship (parked at sit-down,
+-- or any later reading). Returns: ground distance (-1 = nothing seen),
+-- and how far it can see (0 = no down telemeter).
+TeleRest = 3          -- what it reads while the ship sits on the ground (learned)
+function TeleDown()
+  if #Telemeters == 0 then return -1, 0 end
+  local g = vec3(core.getWorldGravity())
+  if g:len() < 0.1 then return -1, 0 end
+  local dn = g / g:len()
+  local pos = vec3(construct.getWorldPosition())
+  local best, range = -1, 0
+  for _, t in ipairs(Telemeters) do
+    local ok, r = pcall(t.raycast)
+    local okM, m = pcall(t.getMaxDistance)
+    m = (okM and tonumber(m)) or 100
+    if ok and type(r) == "table" and r.hit and r.point then
+      local p = vec3(r.point.x or r.point[1], r.point.y or r.point[2], r.point.z or r.point[3])
+      -- From the TELEMETER, not the ship's centre: on a big ship it sits
+      -- metres to the side, so a hit 3 m below it is nowhere near
+      -- "straight below the centre" (Carl's Rouen V2: never counted).
+      local o = pos
+      if not t.helmOff then
+        local okI, id = pcall(t.getLocalId)
+        local okP, lp = false, nil
+        if okI and id then okP, lp = pcall(core.getElementPositionById, id) end
+        if okP and type(lp) == "table" then
+          t.helmOff = vec3(lp[1] or lp.x or 0, lp[2] or lp.y or 0, lp[3] or lp.z or 0)
+        else
+          t.helmOff = vec3()
+        end
+      end
+      local L = t.helmOff
+      o = pos + vec3(construct.getWorldOrientationRight()) * L.x
+              + vec3(construct.getWorldOrientationForward()) * L.y
+              + vec3(construct.getWorldOrientationUp()) * L.z
+      local v = p - o
+      if v:len() > 0.5 and (v / v:len()):dot(dn) > 0.95 then t.helmDown = true end
+      if t.helmDown then
+        local d = tonumber(r.distance) or v:len()
+        if best < 0 or d < best then best = d end
+      end
+    end
+    if t.helmDown then range = mmax(range, m) end
+  end
+  return best, range
+end
+-- How far down we can be sure the way is clear: hovers' range, or the
+-- down telemeter's reading / range (minus what it reads when landed + 2 m).
+function SightDown()
+  local tD, tR = TeleDown()
+  if tR <= 0 then return nil end
+  if tD >= 0 then return mmax(tD - TeleRest - 2, 0) end
+  return mmax(tR - TeleRest - 2, 0)
 end
 
 -- Descent speed for this frame (m/s).
@@ -503,12 +567,26 @@ function WaterCheck(vDown)
   local pos = vec3(construct.getWorldPosition())
   local B = NearestBody(pos)
   if not B or (B.atm or 0) <= 0 or (pos - B.c):len() - B.r > 20 then waterT = nil return false end
+  -- Landing on a spot saved UNDER water (below sea level, and we're over
+  -- it): that's where you want to be — no stop at the surface (Carl).
+  if AP.surfB == B and AP.spotR and AP.spotR < B.r - 2 and AP.target then
+    local dl = norm(AP.target - B.c)
+    local rel = pos - B.c
+    if (rel - dl * rel:dot(dl)):len() < 300 then
+      if not WaterSink then WaterSink = true; Msg("Spot is under water — sinking to it") end
+      waterT = nil
+      return false
+    end
+  end
   waterT = waterT or now()
   if now() - waterT < 1.5 then return false end
   waterT = nil
   SetHover(true)
   WaterHold = true
-  Msg(string.format("Water — hovering %.0f m above it. G: sink and land on the bottom", HoverHeight))
+  -- Brakes held too, so it doesn't drift off the spot (Carl). Any
+  -- movement key or Ctrl+Alt lets them go; G sinks.
+  ParkBrake = true
+  Msg(string.format("Water — hovering %.0f m above it, brakes held. G: sink and land on the bottom", HoverHeight))
   return true
 end
 
@@ -555,7 +633,8 @@ local function landSpeedFor(d, glen, mass)
   if d < 0 then
     -- Ground not in sensor range: it's at least the sensor range away,
     -- and at least our height above the highest terrain.
-    local gMin = mmax(GroundRangeSeen, clear or 0)
+    -- (a down telemeter sees further: its reading or range counts too)
+    local gMin = mmax(GroundRangeSeen, clear or 0, SightDown() or 0)
     return clamp(VStopIn(aPlan, gMin), LandRate, vMax)
   end
   return clamp(VStopIn(aPlan, d - (GroundRest or 0) - 2), LandRate, vMax)
@@ -572,6 +651,8 @@ function HoverTick(vel)
   local function done()
     ReadGroundDist()
     if GroundDist >= 0 and GroundDist < 6 then GroundRest = GroundDist end
+    local tD = TeleDown()
+    if tD >= 0 and tD < 15 then TeleRest = tD end
     SetHover(false)
     ParkBrake, OnGround = true, true
     WaterSink, WaterHold = nil, nil
@@ -614,14 +695,34 @@ function HoverTick(vel)
   end
 
   -- Phase 2: DESCEND.
-  -- Last metre above touching: remember the fastest fall, then any
+  -- Under water the hovers read 0 ("touching" all the way down), so it
+  -- sank at touchdown speed. A down telemeter sees the seabed through the
+  -- water (Carl, 1115-1033: 98.6 m → 2.2 m, sank at up to 97 km/h, eased
+  -- to 9) — use its distance; no hit keeps it slow (safe either way).
+  local gD = GroundDist
+  do
+    local pos = vec3(construct.getWorldPosition())
+    local Bw = NearestBody(pos)
+    local depth = Bw and (Bw.atm or 0) > 0 and (Bw.r - (pos - Bw.c):len()) or -1
+    if depth > 3 then
+      local tD, tR = TeleDown()
+      if tD >= 0 then gD = mmax(tD - TeleRest, 0) + (GroundRest or 0)
+      elseif tR > 0 then
+        -- nothing within its range: the seabed is at least that far down
+        -- (Carl: it crept at 8 km/h until the telemeter saw the bottom)
+        gD = mmax(tR - TeleRest, 0) + (GroundRest or 0)
+      end
+    end
+  end
+  -- Last metre above touching (by gD: under water the hovers' 0 counted
+  -- the whole sink — "landed at 111 km/h" after easing to 9): remember the fastest fall, then any
   -- upward kick after it (a bounce).
-  if GroundDist >= 0 and GroundDist < (GroundRest or 0) + 1 then
+  if gD >= 0 and gD < (GroundRest or 0) + 1 then
     landTouched = true
     landPeak = mmax(landPeak, vDown)
     if landPeak > 0.3 then landBounce = mmax(landBounce, -vDown) end
   end
-  local vSet = landSpeedFor(GroundDist, glen, construct.getMass())
+  local vSet = landSpeedFor(gD, glen, construct.getMass())
   if WaterCheck(vDown) then return end            -- touched water: hover on it
   LandVSet = vSet
   LandAcc = wv * ((vSet - vDown) * 2.0) - g
@@ -1961,12 +2062,17 @@ function StartDescent()
     end
   end
   local h = r0 - AP.descentR
+  -- How far off the down line it starts (Carl: a short hop reached hover
+  -- height 12 m off the mark and crept the rest — say so in chat).
+  local rel = vec3(construct.getWorldPosition()) - B.c
+  local dl = norm(AP.target - B.c)
+  local offTxt = string.format(", %.0f m off the mark", (rel - dl * rel:dot(dl)):len())
   if h > 5 then
-    Msg("Descending to "..AP.name.." ("..FormatDist(h).." down) — brake to stop")
+    Msg("Descending to "..AP.name.." ("..FormatDist(h).." down"..offTxt..") — brake to stop")
   else
     -- (short hop: already below the fast part — straight to the slow,
     -- steered final stretch)
-    Msg("Coming down onto "..AP.name..", holding over the mark — brake to stop")
+    Msg("Coming down onto "..AP.name..offTxt..", holding over the mark — brake to stop")
   end
 end
 
@@ -2086,12 +2192,16 @@ function APDescentStep(pos, vel, fwd, up, mass)
       -- below, so no faster than the plain landing would come down here
       -- (it can stop within what the hovers see), but still steering.
       local aPlan = mmax(LandSpare(glen, mass) * LandSafety, 0.3)
-      vmax = clamp(VStopIn(aPlan, gR), LandRate, LandCap())
+      -- (a down telemeter sees ~100 m: as fast as it can stop within that)
+      vmax = clamp(VStopIn(aPlan, mmax(gR, SightDown() or 0)), LandRate, LandCap())
       local DH = AP.descentHold or {}
       AP.descentHold = DH
       if not DH.mapMsg then
         DH.mapMsg = true
-        Msg(string.format("Map pick: ground height unknown — coming down slowly (≤ %.0f km/h) until the hovers see the ground", vmax * 3.6))
+        local _, tR = TeleDown()
+        Msg(string.format("Map pick: ground height unknown — coming down at ≤ %.0f km/h until the hovers see the ground%s", vmax * 3.6,
+          tR > 0 and string.format(" (down telemeter sees %.0f m)", tR)
+                 or (#Telemeters > 0 and " (telemeter linked, but not seen pointing down yet)" or "")))
       end
     end
     if offNow > 4 then vmax = 0 elseif offNow > 2 then vmax = mmin(vmax, 1.5) end
@@ -2149,7 +2259,9 @@ function APDescentStep(pos, vel, fwd, up, mass)
   if offLen > 1.5 then
     -- Slow creep that can still stop with real brake/engine lag (~1-2 s):
     -- it slid past the spot and turned round when lag was in the sim.
-    vHdes = off * (-mmax(mmin(offLen * 0.1, (offLen - 1) / 2.5, 4), 0) / offLen)
+    -- (0.25/s, was 0.1/s: 12 m took ~15 s at the end of a short hop —
+    -- Carl, 1115-0913. The lag-aware (offLen − 1)/2.5 still rules close in.)
+    vHdes = off * (-mmax(mmin(offLen * 0.25, (offLen - 1) / 2.5, 4), 0) / offLen)
   end
   -- Gentle brakes: nothing for small overshoots, then gradually more
   -- (Carl: braking hard made it turn round a lot to push back).
@@ -3883,6 +3995,34 @@ function FlightFlush()
   local man = (Mode == 2) and not AP.active
   local manAcc, manIdle
   if not man or ParkHold then ManHoldPos = nil end   -- after AP/park: hold the height you're at then
+  -- Under water (below sea level on a planet with air): hovers read 0 there
+  -- and push for the surface, so in Maneuver mode they're switched off and
+  -- the engines own the height — drive down with C, let go, it holds that
+  -- depth (Carl: placing a core needs the seabed; ArchHUD had a setting).
+  local underwater = false
+  do   -- (any mode: DU's hover hold must stay off under water; the depth
+       -- hold itself is Maneuver mode's)
+    local Bw = NearestBody(vec3(C.getWorldPosition()))
+    underwater = Bw and (Bw.atm or 0) > 0 and (vec3(C.getWorldPosition()) - Bw.c):len() - Bw.r < -3 or false
+    -- (sitting landed on the seabed: stay quiet as on land, no engines
+    -- holding a ship that's resting on the dirt)
+    if HoverState == "landed" and OnGround then underwater = false end
+    -- DU's own hover hold works inside the engines, whatever we command:
+    -- switch it off going under, back on (if hovering) coming out.
+    if underwater and not UnderwaterNow then
+      Nav.axisCommandManager:deactivateGroundEngineAltitudeStabilization()
+    end
+    if not underwater and UnderwaterNow then
+      UnderwaterNow = false
+      RestoreGroundStab()
+    end
+    UnderwaterNow = underwater
+    if underwater and not UnderwaterMsg then
+      UnderwaterMsg = true
+      Msg(man and "Under water — hovers off, Maneuver mode holds the depth with the engines. Space/C: up/down"
+              or "Under water — hovers off (they'd push for the surface). Alt+4 Maneuver mode holds a depth")
+    elseif not underwater then UnderwaterMsg = nil end
+  end
   if man then
     local acm = Nav.axisCommandManager
     local vmax = mmax(ManeuverSpeed, 1) / 3.6
@@ -3922,8 +4062,8 @@ function FlightFlush()
     manAcc = (wantV - vel) * 1.0 - g
     -- Landed (gear down, no G yet) and no input: stay quiet, same
     -- "no thrust until G" rule as Flight mode.
-    if manIdle and not HoverOn then manAcc = vec3(); ManHoldPos = nil
-    elseif HoverOn and upInput == 0 and Thrust and Thrust.G >= Thrust.weight
+    if manIdle and not HoverOn and not underwater then manAcc = vec3(); ManHoldPos = nil
+    elseif HoverOn and not underwater and upInput == 0 and Thrust and Thrust.G >= Thrust.weight
            and (HoverState == "landing" or GroundDist >= 0) then
       -- Only while the hovers/boosters can actually see the ground: above
       -- their range they push nothing, and handing them the height made
@@ -3999,7 +4139,8 @@ function FlightFlush()
     -- Hovers / vertical boosters still follow G exactly as in Flight mode.
     local acm = Nav.axisCommandManager
     local gAcc = acm:composeAxisAccelerationFromThrottle('thrust analog vertical', axisCommandId.vertical)
-    Nav:setEngineForceCommand('ground', GroundCmd(gAcc), keep, '', '', '', tol)
+    -- (under water in Maneuver: hovers off, the engines hold the depth)
+    Nav:setEngineForceCommand('ground', (man and underwater) and vec3() or GroundCmd(gAcc), keep, '', '', '', tol)
   else
     -- Manual flight: DU's standard throttle / cruise-control handling
     local acm = Nav.axisCommandManager
@@ -4118,7 +4259,10 @@ end
 
 local function manualSteer() if AP.active then APDisengage("manual steering") end end
 local function releasePark()
-  ParkBrake = false
+  -- Landed: the brake lock stays (Carl: Navigator's no-screen list is
+  -- scrolled with the arrow keys, which unlocked the brakes on the pad).
+  -- G / Alt+1 release it for take-off; Ctrl+Alt by hand.
+  if not (HoverState == "landed" and OnGround) then ParkBrake = false end
   if ParkHold then ParkRelease("you're moving") end
 end
 
@@ -4127,8 +4271,26 @@ end
 -- if you switch mode while holding the key.
 fwdKey = 0
 local keyAsMove = {}
+-- Landed with the brake lock on: movement keys do nothing (Carl: the
+-- no-screen Navigator list scrolls with the arrow keys, which also lifted
+-- the ship off the pad and then let the brakes go). Navigator still gets
+-- the keys. G / Alt+1 take off; Ctrl+Alt releases the lock by hand.
+local PAD_KEYS = { up = true, down = true, strafeleft = true, straferight = true,
+                   speedup = true, speeddown = true, forward = true, backward = true }
+local padSwallowed, padMsg = {}, false
+local function padLocked(a)
+  if not (PAD_KEYS[a] and ParkBrake and HoverState == "landed" and OnGround and not AP.active) then return false end
+  -- (W/S pitch in Flight mode — harmless on the ground, leave them alone)
+  if (a == "forward" or a == "backward") and Mode ~= 2 then return false end
+  return true
+end
 function OnActionStart(a)
   local acm = Nav.axisCommandManager
+  if padLocked(a) then
+    padSwallowed[a] = true
+    if not padMsg then padMsg = true; Msg("Brake lock on — movement keys ignored while landed (Ctrl+Alt releases, G / Alt+1 take off)") end
+    return
+  end
   if (a == "forward" or a == "backward") and Mode == 2 and not AP.active then
     keyAsMove[a] = true
     fwdKey = (a == "forward") and 1 or -1
@@ -4193,6 +4355,7 @@ function OnActionStart(a)
     -- Hovering on water: G sinks and lands on the bottom.
     if WaterHold and HoverState == "hover" then
       WaterHold, WaterSink = nil, true
+      ParkBrake = false          -- (held brakes would stop the touchdown being seen)
       if ParkHold then ParkRelease(nil) end
       SetHover(false, true)
       Msg("Sinking — landing on the bottom (G again to hover)")
@@ -4225,6 +4388,7 @@ end
 
 function OnActionStop(a)
   local acm = Nav.axisCommandManager
+  if padSwallowed[a] then padSwallowed[a] = nil return end   -- its press was ignored too
   if (a == "forward" or a == "backward") and keyAsMove[a] then
     keyAsMove[a] = nil
     fwdKey = keyAsMove.forward and 1 or (keyAsMove.backward and -1 or 0)
@@ -4251,6 +4415,7 @@ end
 
 function OnActionLoop(a)
   local acm = Nav.axisCommandManager
+  if padSwallowed[a] then return end
   if     a == "speedup"   then acm:updateCommandFromActionLoop(axisCommandId.longitudinal, 1.0)
   elseif a == "speeddown" then acm:updateCommandFromActionLoop(axisCommandId.longitudinal, -1.0)
   elseif a == "groundaltitudeup"   then acm:updateTargetGroundAltitudeFromActionLoop(1.0)
@@ -4431,7 +4596,7 @@ function PrintHelp()
   system.print("ap / ap on / ap off   engage / disengage   (Alt+1)")
   system.print("clear                 clear target         (Alt+2)")
   system.print("hud                   toggle HUD           (Alt+3)")
-  system.print("hud scale|bottom|shift|opacity N   size / position / opacity, saved")
+  system.print("hud scale N · hud bottom N · hud shift N · hud opacity N   HUD size / height / sideways / see-through, saved")
   system.print("hudtheme NAME         cyan amber green red purple white #RRGGBB, saved")
   system.print("mode / mode flight / mode maneuver       (Alt+4)")
   system.print("thrust                engine push in all 6 directions")
@@ -4498,7 +4663,7 @@ function OnInputText(text)
     if set[key] and n then
       Msg(string.format("HUD %s: %s", key, tostring(set[key](n))))
     else
-      Msg(string.format("HUD  scale %.2f · bottom %s · shift %s · opacity %.2f  —  hud scale|bottom|shift|opacity N",
+      Msg(string.format("HUD  scale %.2f · bottom %s · shift %s · opacity %.2f  —  e.g. hud bottom 10, hud shift -5",
         HudScale, tostring(HudBottom), tostring(HudShift), HudOpacity))
     end
   elseif lo:match("^hudtheme") then
@@ -4542,7 +4707,7 @@ function OnInputText(text)
       local tgt = sv("sf_target")
       system.print("[HELM]   Target: "..(tgt and (tgt:match("^([^|]*)") or tgt) or "— none"))
       system.print("[HELM]   (Autopilot/flight settings aren't saved — they come from the Lua parameters.)")
-      system.print("[HELM]   Change a saved one with: hudtheme NAME · hud scale|bottom|shift|opacity N")
+      system.print("[HELM]   Change a saved one with: hudtheme NAME · hud scale N · hud bottom N · hud shift N · hud opacity N")
     end
   elseif lo == "links" then
     -- What the seat actually sees in each link slot (diagnostic)
@@ -5237,6 +5402,7 @@ function FlightTick(id)
   elseif id == "nav" then
     RefreshShipStats()
     SurveyThrust()   -- atmo/space and gravity change as you fly
+    TeleDown()       -- learns which telemeters point down (a hit straight below)
     if NavDB then NavKind = BankKind(NavDB) end   -- blank bank → hud once Navigator sends
     ReadFuel()
     UpdateRadar()
@@ -5295,6 +5461,7 @@ system.print("[HELM] Helmsman v"..VERSION.." (build "..BUILD..")"..
       mine = "OK (no Navigator yet)", blank = "OK (no Navigator yet)", other = "OK (other data)" })[BankKind(NavDB)] or "none")..
   "  |  antigrav="..(antigrav and "OK" or "none")..
   "  |  ground sensors="..#GroundEngines..
+  (#Telemeters > 0 and ("  |  telemeter="..(select(2, TeleDown()) > 0 and "pointing down" or "linked, not seen pointing down")) or "")..
   "  |  radars="..#Radars..(#Switches > 0 and ("  |  switches="..#Switches) or "")..
   "  |  warp="..(WarpDrive and "OK" or "none"))
 ScanFuelTanks()

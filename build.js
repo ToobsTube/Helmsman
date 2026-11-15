@@ -39,6 +39,9 @@ const CONF_SLOTS = [
   // still driven by tags, links don't change that).
   ['vBooster', { class: 'VerticalBooster' }],
   ['hover',    { class: 'Hovercraft' }],
+  // A telemeter pointing DOWN sees ~100 m: faster landings when the ground
+  // height is unknown (map picks). Only used once a reading proves it's down.
+  ['telemeter', { class: 'TelemeterUnit' }],
   // Manual: the pilot links the radar(s); the script finds them by class.
   // (Fuel tanks need no links — every tank is read through the core.)
   ['radar',    { class: 'RadarPVPUnit', select: 'manual' }],
