@@ -484,6 +484,34 @@ function VStopIn(a, D)
   D = mmax(D, 0)
   return -a * LAND_LAG + msqrt((a * LAND_LAG) ^ 2 + 2 * a * D)
 end
+-- ── Water: hover on the surface ──
+-- Hovers / boosters DO see the water surface, and read 0 under it — so a
+-- landing on the sea "touched" and then kept sinking at touchdown speed
+-- to the seabed, waiting for a stop that never came (Alioth, 1115-0717:
+-- "LANDING 0 m" at -207 m, landed at -408 m). DU's own hover mode holds a
+-- height above water fine (ArchHUD hovers there the same way). So: at the
+-- touch, near sea level, still sinking for 1.5 s → it's water → hover.
+-- G from there sinks and lands on the bottom (Carl's choice). A beach at
+-- sea level stops the ship, so it lands as normal.
+WaterHold, WaterSink = nil, nil
+local waterT
+function WaterCheck(vDown)
+  if WaterSink or GroundDist < 0 or GroundDist > (GroundRest or 0) + 0.5 or vDown < 0.3 then
+    waterT = nil
+    return false
+  end
+  local pos = vec3(construct.getWorldPosition())
+  local B = NearestBody(pos)
+  if not B or (B.atm or 0) <= 0 or (pos - B.c):len() - B.r > 20 then waterT = nil return false end
+  waterT = waterT or now()
+  if now() - waterT < 1.5 then return false end
+  waterT = nil
+  SetHover(true)
+  WaterHold = true
+  Msg(string.format("Water — hovering %.0f m above it. G: sink and land on the bottom", HoverHeight))
+  return true
+end
+
 -- Landing report (sit-down) / warning (each landing). Carl: let the
 -- pilot pick a speed, but say if the ship can't really stop from it.
 function LandingReport(warnOnly)
@@ -546,6 +574,7 @@ function HoverTick(vel)
     if GroundDist >= 0 and GroundDist < 6 then GroundRest = GroundDist end
     SetHover(false)
     ParkBrake, OnGround = true, true
+    WaterSink, WaterHold = nil, nil
     -- how far from the AP's spot, if we were landing on one
     local offTxt = ""
     local S = AP.surfB
@@ -593,6 +622,7 @@ function HoverTick(vel)
     if landPeak > 0.3 then landBounce = mmax(landBounce, -vDown) end
   end
   local vSet = landSpeedFor(GroundDist, glen, construct.getMass())
+  if WaterCheck(vDown) then return end            -- touched water: hover on it
   LandVSet = vSet
   LandAcc = wv * ((vSet - vDown) * 2.0) - g
   -- Brakes help when falling faster than wanted (they work at any height,
@@ -1136,7 +1166,9 @@ function WarpMatches()
   local B = AP.surfB or NearestBody(AP.target)
   if B and (AP.target - B.c):len() < B.r * 5 then
     local wn, bn = Warp.dest:lower(), B.name:lower()
-    if wn == bn or wn:find(bn, 1, true) or bn:find(wn, 1, true) then return true end
+    -- exact name only: "Alioth" is part of "Alioth Moon 4" and "Alioth
+    -- Prime", so a part match would warp to the wrong body
+    if wn == bn then return true end
   end
   if Warp.dist and Warp.dist > 0 then
     local d = (AP.target - pos):len()
@@ -1172,8 +1204,20 @@ if Atlas then
         if r > 0 and type(b.center) == "table" then
           local n = b.name; if type(n) == "table" then n = n[1] end
           local atm  = tonumber(b.atmosphereRadius) or 0
-          local surf = r + (tonumber(b.surfaceMaxAltitude) or r*0.05)
-          local gm = tonumber(b.GM) or ((tonumber(b.gravity) or 0) * r * r)
+          -- (a NEGATIVE highest ground is an atlas error — the game's own
+          -- atlas says -42 m for Alioth Moon 4, so spots on its surface
+          -- weren't "on" the moon and every route was "blocked by Alioth
+          -- Moon 4" (Carl, 1115-0746). Then use the 5% guess.)
+          local sMax = tonumber(b.surfaceMaxAltitude)
+          -- (0 too: the custom "Prime" moons in atlasCG1 all say 0)
+          if not sMax or sMax <= 0 then sMax = r * 0.05 end
+          local surf = r + sMax
+          -- Surface gravity × radius² first: the custom "... Prime" bodies
+          -- in atlasCG1 carry GM figures 2-60% of the real pull (Thades
+          -- Prime 0.07×: the orbit hop crawled at ~330 km/h "orbital"
+          -- speed, 1115-0629), while their gravity matches what DU reads.
+          local gv = tonumber(b.gravity) or 0
+          local gm = (gv > 0 and gv * r * r) or tonumber(b.GM) or 0
           Bodies[#Bodies+1] = { id=id, name=tostring(n or ("body "..tostring(id))), c=V(b.center), r=r, hard=mmax(atm, surf), top=surf, atm=atm, gm=gm,
                                     stat=tonumber(b.maxStaticAltitude) }
         end
@@ -1213,7 +1257,11 @@ end
 -- every such trip would be "blocked" by the planet it starts next to.
 local function obstacleR(B, a, b)
   local R = B.hard + PlanetClearance
-  if (a - B.c):len() < R or (b - B.c):len() < R then R = B.hard + 500 end
+  -- (+1 km: the hold point over a surface spot sits EXACTLY at hard +
+  -- PlanetClearance, so a rounding hair outside counted it as "not near",
+  -- the full band then hit the segment's own end, every corner did the
+  -- same, and it gave up: "Path blocked by Alioth Moon 4" — Carl, 1115-0742)
+  if (a - B.c):len() < R + 1000 or (b - B.c):len() < R + 1000 then R = B.hard + 500 end
   return R
 end
 local function firstBlock(a, b)
@@ -1572,6 +1620,13 @@ function SetTarget(name, posStr, hdg)
   local note
   local spot, trustedR, mapPick = nil, nil, nil
   local B = InsideBody(p)
+  -- (a spot a little above the atlas' highest ground is still ON that
+  -- body — atlas heights aren't always right)
+  if not B then
+    for _, Bb in ipairs(Bodies) do
+      if (p - Bb.c):len() < Bb.top + 5000 then B = Bb break end
+    end
+  end
   if B then
     -- The AP flies to a hold point above the spot (then descends if AutoLand).
     local up = norm(p - B.c)
@@ -1880,7 +1935,7 @@ end
 
 function StartDescent()
   AP.active, AP.descent, AP.phase = true, true, "DESCENT"
-  AP.accel, AP.brake, AP.angVel, AP.descentHold = 0, 0, vec3(), nil
+  AP.accel, AP.brake, AP.angVel, AP.descentHold, AP.vAccel = 0, 0, vec3(), nil, 0
   ParkBrake = false
   Nav.axisCommandManager:resetCommand(axisCommandId.longitudinal)
   local B = AP.surfB
@@ -2202,6 +2257,22 @@ function APDescentStep(pos, vel, fwd, up, mass)
   if hv and not (D.steer and D.noTilt) then
     AP.angVel = AP.angVel + (-dn) * YawRate(yawH, -dn, 0.6, 0.15)
   end
+  -- Down push (Carl: "add up facing engines to help descend"): high up the
+  -- fall starts slow and only gravity speeds it up. Engines facing up push
+  -- the ship down, so use them until the fall is near the speed the plan
+  -- allows (8 m/s short of it — engines keep pushing a moment after being
+  -- told to stop), never while braking, never in the slow final stretch.
+  -- The braking plan and burn cap set vmax as before, so stopping is
+  -- unchanged. Ships without such engines just fall as they did.
+  local vAcc = 0
+  if brake == 0 and not final and vmax > 20 and goal > 300 and (Thrust and (Thrust.D or 0) > 0) then
+    vAcc = -clamp((vmax - 8 - vDown) * 0.5, 0, 10)
+    if vAcc < -0.5 and not D0.pushMsg then
+      D0.pushMsg = true
+      Msg("Up-facing engines pushing the fall to speed")
+    end
+  end
+  AP.vAccel = vAcc
   AP.brake, AP.accel, AP.phase = brake, accel, "DESCENT"
   AP.alignErr = math.deg(mabs(pitchAng))
   -- Hand over to the landing: fast part done (and slowed), or the ground
@@ -2231,6 +2302,15 @@ function APDescentStep(pos, vel, fwd, up, mass)
     -- over the spot (or the ground is close anyway), or far below the
     -- spot height we were given (it was wrong): the landing takes over
     handOver = (seesGround and (offNow <= 2.5 or GroundDist < 6)) or (AP.spotR and rel:len() < AP.spotR - 30)
+    -- Sat down already (Thades map pick, 1115-0636: on its gear 3 m off
+    -- the mark, hover reading 6+ m, so it held there in DESCENT): seeing
+    -- the ground and not moving for 3 s → the landing takes over.
+    if seesGround and vel:len() < 0.5 then
+      D0.restT = D0.restT or now()
+      if now() - D0.restT > 3 then handOver = true end
+    else
+      D0.restT = nil
+    end
   else
     handOver = (goal <= 5 and vDown < 5 and offNow <= 4) or seesGround
   end
@@ -2921,7 +3001,13 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
     -- loses speed — and still not gaining height for 10 s.
     -- (also simply SINKING, whatever the angle: Carl's ship started to
     -- fall in the climb with no message)
-    if (vUp < 1.5 and vF > 50 and (climbMax >= capRad - 0.01 or losing)) or (vUp < -2 and vF > 30) then
+    -- (at the burn-speed cap, losing speed is the brakes doing their job,
+    -- not a sign the climb is failing — Thades 1115-0629: CAN'T REACH SPACE
+    -- at 30 km, 1020 km/h, sitting on the cap)
+    local capC = CruiseCap()
+    if inAtmo and B and (B.atm or 0) > 0 then capC = mmin(capC, BurnCap()) end
+    local atCap = speed > capC * 0.97
+    if (vUp < 1.5 and vF > 50 and (climbMax >= capRad - 0.01 or (losing and not atCap))) or (vUp < -2 and vF > 30) then
       T.sinkT = T.sinkT or tNow
       local sinking = vUp < -2
       if tNow - T.sinkT > (sinking and 3 or 10) and not T.warned then
@@ -3017,7 +3103,11 @@ function APTakeoffStep(pos, vel, fwd, up, mass)
       -- brakes take the excess speed. Cutting thrust to 'hold speed along
       -- the nose' left less lift than gravity: the sim sank back from
       -- 8.3 km while sitting at the speed cap.
-      accel = mmin(aMax, glen * 1.15 / mmax(fwd:dot(upW), 0.3))
+      -- Out to space: 1.15 g only just beats gravity, and the brakes then
+      -- ate the climb too (Thades, 30 km: levelled off at the cap). Push
+      -- for a real climb (+3 m/s² upward), the brakes keep the speed.
+      local upNeed = T.atmo and glen * 1.15 or (glen * 1.15 + 3)
+      accel = mmin(aMax, upNeed / mmax(fwd:dot(upW), 0.3))
       brake = clamp((speed - cap) / 20, 0, 1)
     end
   end
@@ -3891,7 +3981,7 @@ function FlightFlush()
   if AP.active then
     Nav:setEngineForceCommand('thrust analog longitudinal', fwd * AP.accel, keep)
     Nav:setEngineForceCommand('thrust analog lateral', vec3(), keep)
-    Nav:setEngineForceCommand('thrust analog vertical', up * ((AP.takeoff and AP.vAccel) or 0), keep)
+    Nav:setEngineForceCommand('thrust analog vertical', up * (((AP.takeoff or AP.descent) and AP.vAccel) or 0), keep)
     -- (zero the group first, then the wings — same order as hand flying)
     if AP.takeoff and AP.wingLift then
       Nav:setEngineForceCommand('airfoil vertical', AP.wingLift, keep, 'airfoil', '', '', tol)
@@ -4100,6 +4190,15 @@ function OnActionStart(a)
     -- 1114-1100: G mid take-off said "Landing" but the climb kept full
     -- throttle until he braked).
     if AP.active then APDisengage("G pressed") end
+    -- Hovering on water: G sinks and lands on the bottom.
+    if WaterHold and HoverState == "hover" then
+      WaterHold, WaterSink = nil, true
+      if ParkHold then ParkRelease(nil) end
+      SetHover(false, true)
+      Msg("Sinking — landing on the bottom (G again to hover)")
+      return
+    end
+    WaterHold, WaterSink = nil, nil
     if ParkHold then ParkRelease(nil) end
     -- GLandsDirect: flying (not sitting on anything) → land in one press.
     if GLandsDirect and HoverState == "landed" and not OnGround then
