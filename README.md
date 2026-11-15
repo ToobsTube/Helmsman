@@ -1,205 +1,228 @@
 # Helmsman
 
-A Dual Universe seat flight script with a space autopilot. It is the companion to **DU Starmap Navigator**.
+A flight script and autopilot for **Dual Universe** seats, cockpits and remote controllers. It flies the ship by hand the way DU's standard script does, and its autopilot takes you anywhere: across space, round planets, from one planet's surface to another's, and down onto the exact spot.
 
-- Normal manual flight (DU's standard flight model: throttle, cruise control, hovers, boosters, gear, anti-grav).
-- **Space autopilot**: align, burn, cruise, and brake to a full stop `StopDistance` short of the target. Routes around planets automatically.
-- **Surface to surface**: Alt+1 on the ground takes off and climbs out of the atmosphere; a surface destination ends with a straight descent and landing on the spot.
-- **Radar**: collision warning on the HUD, and the AP stops short of anything in its path.
-- **Paste to fly**: paste any `::pos{...}` (or `Name ::pos{...}`) into Lua chat and the ship flies there.
-- **Navigator link**: NAVIGATE in Navigator and the target appears here. With Navigator's AUTO FLY on, the AP engages by itself and route stops chain.
-- AR overlay HUD showing target, distance, ETA, speed, braking distance, and AP phase.
+Helmsman works on its own. It's also the companion to **DU Starmap Navigator**: pick a destination there and Helmsman flies it.
 
-> Surface targets: the AP flies to a hold point in space straight above the spot (outside the atmosphere *and* above the highest terrain, which matters for Thades) and stops right on it, not `StopDistance` short. With **AutoLand** on (default) it then **descends straight down the down line**, steering back over the spot all the way down: it tilts its belly toward where it needs to go, by pitch or roll, up to 20° (a falling ship slides toward its low side; the idea is from SagaHUD by Sagacious), and can also turn to face the spot and give the main engines small pushes: gravity does the accelerating, the brakes keep the speed under 85% of the ship's atmospheric burn speed and stop the fast part `DescentHeight` (100 m) above the spot (or above the atlas's highest terrain when the location's altitude is 0, as map picks often are). Below that, if the ship has hovers or vertical boosters, it keeps coming down slowly (when the spot's altitude is unknown, no faster than the normal landing would), still holding over the spot (turning to face it if needed), until the hovers see the ground; then the normal landing sets you down and reports how far from the mark it landed. Brake at any time stops it; Alt+1 above the spot carries on down. AutoLand off: it stops above and waits for G. Picking a body's centre on the map gives the side facing you (no auto-descent: there is no real spot).
+## What it does
 
-## Take-off (Alt+1 on the ground or in atmosphere)
-
-Set a target, then press **Alt+1** (or type `ap` / `go`) while landed or flying in atmosphere:
-
-1. **LIFT**: hovers / vertical boosters lift the ship to hover height, as G does. If they can't get it there (it stops rising below it, or 12 s pass), the take-off stops with a NOT ENOUGH LIFT popup and the ship keeps hovering where it is: a ship that can't reach its hover height can't be trusted to clear rough ground.
-2. **LINE UP**: brakes on, the ship turns level toward the destination. The radar collision warning keeps watching during the climb (brake to stop if anything is in the way).
-3. **CLIMB**: main engines only. The nose comes up **only as forward speed builds** (level below 29 km/h, full climb angle from 119 km/h) and comes back down if the speed drops, so the ship is never steep and slow. The full angle comes from thrust-to-weight (shallower for heavy ships), up to 45°; if the ship isn't actually climbing it raises the angle step by step to that limit, but only while that doesn't cost forward speed (in thin air a steeper nose just bleeds speed and lift). If it still can't climb, an atmosphere trip cruises at the height it reached ("Can't climb higher — cruising at X m"); a trip to space shows a CAN'T REACH SPACE popup so you can take over. Speed stays under 85% of the burn speed. Turns are flown like a plane (SAGA-style): heading changes round the vertical only, and the bank is twice the angle between the ship's track and the target, up to 45° (faded in from ~140 to ~290 km/h, less if the ship is sinking). A new target well to the side or behind (more than 30° off, over 1 km away) starts a **TURN**: the ship keeps flying speed (brakes only down to what keeps the turn circle inside the distance, never below ~200 km/h), banks fully to one side and lets the nose lead its track by 40° so wings and engines carry it round, holding height with the cruise's own control. If it stops coming round (the target angle doesn't close by 15° within 20 s, or 30 s at the start while it slows to turn speed), or drifts further away than 3 km or half the distance it started the turn at, whichever is more, the AP turns off and the ship lands where it is, with a CAN'T TURN — LANDING popup: a flat turn on the spot would stall a ship that isn't hovering. Alt+1 once down carries on to the target.
-4. Once out of the atmosphere (1 km above it), the normal space AP takes over: route around planets, cruise, stop. A surface destination then descends and lands as above.
-
-Only your own Alt+1 / `ap` / `go` starts a take-off. Navigator's Auto Fly or a pasted `::pos` while parked just sets the target and says "Alt+1 to take off". Brake stops the take-off at any moment.
-
-### Atmosphere trips (same planet, default)
-
-When the destination is a surface spot on the **same planet** you're on or flying over, and that planet has an atmosphere, the ship stays in the air by default (`PlanetTrips = "atmo"`). It doesn't go to space, however far the spot is:
-
-1. Take-off as above (LIFT, LINE UP, CLIMB).
-2. The climb runs at full throttle, as steep as the ship can manage (up to 45°), flattening as it speeds up so it can level off in time, and rounds off smoothly into **CRUISE** at `AtmoCruiseHeight` (3,000 m by default; raised over the highest terrain and tallest allowed buildings, kept under the atmosphere top), heading for the spot, under the burn speed. Short hops climb less: about 30% of the distance (a 1 km hop goes about 300 m up).
-3. **Gradual approach**: like SAGA and Arch, it starts slowing well before the spot (about 30% of the brakes, at most 0.8 g), still holding height and heading, and eases in over the last stretch, so it ends almost stopped right over the spot. **SLOWING** (full brakes) is only a backup if it's well over that curve. Down-facing engines (not hovers) hold the height while it's slow, but atmo engines lose push as the air thins, faster than the density itself (measured: about push × density²; DU only reports the sea-level figure). If they can't hold the ship at the cruise height, it comes down before slowing, while still fast, to where they can (never below 350 m over the descent start). If they still turn out too weak, it lets the ship sink rather than holding the brakes on. The `thrust` command shows the up engines' push here and the air density they need.
-4. The straight-down descent and landing, as for any surface spot. A short hop that ends lower than where the fast descent would start goes straight to the descent's slow final stretch (belly tilt and position hold over the mark) until the hovers see the ground, the same as long trips.
-
-`PlanetTrips = "orbit"` climbs out instead and uses the space route or orbit hop below. `"auto"` stays in the air up to `AtmoHopMax` km and goes via orbit beyond it.
-
-### Orbit hop (same planet, far side)
-
-When the destination is a surface spot on the **same planet**, the planet is in the way, and that planet **has an atmosphere**, the AP flies a low orbit round it (`ORBIT` phase) instead of the corner route. It stays near the height it starts at (at least 2 km above the atmosphere, at most `PlanetClearance` above it; the hold point above the spot moves to that height too) at just under orbital speed (about 3,700 km/h on Alioth), so it mostly coasts with the nose level along the curve; height is kept by small speed changes, never by pointing at the planet. Near the far side it hands over to the normal stop and auto-descent. This also works when you engage from low orbit near that planet. Moons and airless bodies always use the normal route at full speed: there's no burn speed there, so nothing is limited. `OrbitHop = false` turns it off.
-
-## Build
-
-```
-node build.js
-```
-
-This produces both install formats from the same source:
-
-- `dist/Helmsman_v0.1.txt`: paste-able Lua configuration
-- `dist/Helmsman_v0.1.conf`: custom autoconfigure file
+- **Space autopilot:** turns, burns, cruises and brakes to a stop. It routes round planets and moons by itself.
+- **Surface to surface:** Alt+1 on the ground takes off, flies the trip and lands on the spot. Landings usually end within a few metres of the mark.
+- **Trips on the same planet:** flies in the atmosphere at a safe cruise height, or (optionally) in a low orbit for long trips.
+- **Paste to fly:** paste any `::pos{...}` into Lua chat and the ship flies there. Add `|hdg=N` and it parks facing that way.
+- **Navigator link:** NAVIGATE in Navigator and the target appears here. With Navigator's AUTO FLY on, route stops chain automatically.
+- **Landings onto unknown ground** (map picks): finds the ground on the way down. A telemeter pointing down makes them much faster.
+- **Water:** lands onto water by hovering on it, sinks to the seabed on G, holds a depth under water and rises back to the surface under control.
+- **Radar:** collision warning on the HUD, and the autopilot stops short of anything in its path.
+- **AGG:** anti-grav controls, and autopilot trips that stay at the AGG height instead of landing.
+- **Fuel:** every tank read without links, with time left and bars per fuel type.
+- **Warp:** warp status on the HUD, and opt-in auto-warp to where the autopilot is going.
+- **Also:** safe cargo mass, rockets for heavy climbs, a Maneuver mode for docking, a fighter-style attitude HUD, and an optional emergency control unit (ECU) script.
 
 ## Install
 
-### Option A: paste (recommended, and the one to use for DRM ships)
-1. Link the **core unit** to the seat or remote controller. Optionally also link: the **databank shared with Navigator**, the **anti-grav generator**, **one hover or vertical booster** (lets landings read the distance to the ground), a **telemeter pointing down** (sees ~100 m: faster landings onto unknown ground), **radar(s)**, the **warp drive**, and any **manual switch** for cabin automation. Any slot, any order works, because the script identifies each element by class at startup.
-2. Open `Helmsman_v0.1.txt`, copy everything, then right-click the seat → *Advanced* → *Paste Lua configuration from clipboard*.
+Download the files from the **Releases** page: `Helmsman_v1.0.txt`, `Helmsman_v1.0.conf` and (optional) `Helmsman_ECU.conf`.
+
+### Option A: paste (recommended; use this for DRM ships)
+1. Link the **core unit** to the seat, cockpit or remote controller. Any slot, any order: the script finds each element by what it is. Optionally also link:
+   - the **databank shared with Navigator** (also keeps your settings across new pastes)
+   - **one hover or vertical booster** (landings read the distance to the ground)
+   - a **telemeter pointing straight down** (sees ~100 m: much faster landings onto unknown ground and water)
+   - the **anti-grav generator**, **radar(s)**, the **warp drive**
+   - any **manual switch** for cabin automation
+2. Open `Helmsman_v1.0.txt`, copy everything, then right-click the seat → *Advanced* → *Paste Lua configuration from clipboard*.
 
 ### Option B: autoconfigure
-1. Copy `Helmsman_v0.1.conf` to `...\Dual Universe\Game\data\lua\autoconf\custom\`
-2. Right-click the seat → *Advanced* → *Run custom autoconfigure* → **Helmsman v0.1**.
-
-   **Linked automatically:** core, anti-grav generator, vertical boosters, hovers, telemeter, warp drive.
-
-   **Link by hand afterwards** (only the ones you use):
-   - the **databank shared with Navigator**
-   - **radar(s)**, atmo and/or space (collision warning, AP obstacle stop)
-   - **manual switch(es)** for cabin automation (on while seated, off when you get up)
-
-   Fuel tanks need no links.
+1. Copy `Helmsman_v1.0.conf` to `...\Dual Universe\Game\data\lua\autoconf\custom\`.
+2. Right-click the seat → *Advanced* → *Run custom autoconfigure* → **Helmsman v1.0**.
+   - **Linked automatically:** core, anti-grav generator, vertical boosters, hovers, telemeter, warp drive.
+   - **Link by hand afterwards** (only the ones you use): the databank shared with Navigator, radar(s), manual switch(es). Fuel tanks need no links.
 
 Either way, sit down and check the Lua console:
-`[HELM] Helmsman v0.1.0 | atlas=atlas (N bodies) | databank=Navigator HUD bank | antigrav=OK | ground sensors=1 | radars=1 | switches=1 | warp=OK`
 
-(`switches=` only appears when a switch is linked.)
+`[HELM] Helmsman v1.0.0 (build …) | atlas=atlas (N bodies) | databank=Navigator HUD bank | antigrav=OK | ground sensors=1 | telemeter=pointing down | radars=1 | warp=OK`
 
-The built files have the comments stripped to keep the paste small (about 180 KB). Your parameters and their descriptions are kept. `node build.js --full` builds the commented version.
+Then type `help` in Lua chat for the commands.
+
+**Tip:** if pasting says "Lua script has no parameters", stop any other programming board that's running on the ship (Navigator, for example), paste again, then start it back up.
+
+The released files have their comments stripped to keep the paste small (about 180 KB). Your parameters and their descriptions are all still there.
 
 ### Emergency control unit (optional)
-`ecu/Helmsman_ECU.conf` takes over when you leave the seat while flying. Copy it to `...\autoconf\custom\`, then right-click the ECU → *Advanced* → *Run custom autoconfigure* → **Helmsman ECU**. It links the core, a hover or vertical booster, and a telemeter by itself. Optionally, link the databank you share with Helmsman by hand.
-- **Near a planet:** the ECU levels the ship, stops any drift, and hovers at `HoverHeight` over ground or water. From high up it falls no faster than `MaxFall` until the hovers see something. With a telemeter pointing down it can fall faster, up to `MaxFallTele`, and still slow down in time.
-- **Under water:** the ECU holds that exact spot with the engines.
-- **In space:** the ECU brakes to a stop.
-- **Fuel:** every minute it prints how long the fuel will last. When the tanks feeding the running engines have less than `LandMinutes` left, it lands slowly and switches off.
-
-The ECU never touches the AGG.
-
-## Optional links: fuel, radar, switches, AGG, warp
-
-- **Fuel (no links needed):** every fuel tank on the construct is read through the core. The HUD shows a row per fuel type (ATMO / SPACE / ROCKET) with litres left, %, and a bar: green above 50%, amber from 20 to 50%, red below 20%. Litres come from each tank's weight; capacity comes from its size and tier, using DU's standard values. Set the tank owner's fuel talents once with `fueltalents A S R O C` (atmo, space and rocket tank handling, fuel tank optimization, container optimization, each 0-5; the old `fueltalents H O C` sets all three handlings to H). The values are saved to the databank and are also parameters. A `~` before the % means a tank holds more than those talents allow, so they're set too low. `fuel` lists every tank, to compare with DU's own refuel-tool readout.
-- **Radar (link manually):** link an atmo radar, a space radar, or both, in any slot. DU's own radar widget is shown for whichever one works where you are, switching automatically when you enter or leave atmosphere. The HUD shows the contact count.
-- **Collision warning (needs a radar):** a contact on or near your path shows as a strip above the HUD: amber `CONTACT ON PATH` (name, size, distance, seconds to it, how far off you would pass), red `COLLISION — BRAKE NOW` when the brakes alone can no longer stop you short of it. It never takes over a ship you are flying yourself. Contacts the autopilot will stop short of anyway (such as the station you are flying to) are ignored.
-- **Autopilot obstacle stop (CollisionStop, on by default):** when the AP is flying and a contact is on its path, it plans a stop about 50 m before the warning zone (phase OBSTACLE, red), holds the brakes and hands back to you with the name and distance. Fly round it, or press Alt+1 to carry on anyway (that contact is then ignored for the trip). If the contact moves off the path while the AP is still well short of it, the AP continues by itself. It never steers round anything. When DU only gives a distance, the contact is assumed to stand still and the result is marked `(est)`. `radar` in Lua chat lists the contacts. Turn off with the CollisionWarn parameter.
-- **Manual switches (link manually):** any manual switch linked to the seat or remote turns **on when you sit down and off when you get up**, as in ArchHUD. Ships use it for cabin automation (seat → switch → doors, force fields, lights). It never touches the anti-grav generator.
-- **Anti-grav generator (auto-linked by the `.conf`; link it yourself for the paste install):** Alt+G (DU's anti-gravity key) or `agg on` / `agg off` in Lua chat turns it on and off. If another program such as Copilot or Gemini takes Alt+G, rebind the anti-gravity key in DU's controls or use the chat commands. In Lua chat, `agg 2500` sets the hover height (metres, 1,000 or more), `agg here` sets it to your current altitude, and `agg` on its own prints the status. The height is stored on the AGG itself, so it survives getting up, restarts and reinstalls. The SYSTEMS panel shows an AGG row: grey when off, amber while the lift creeps to a new height (with a time estimate), green when holding, red `no pulsors linked` when the generator reports no pulsors (it then lifts nothing, whatever the heights say). A note under it says how far you are above or below the lift. The AGG holds the ship at the **lift point**, not at the height you set: until the row turns green it pulls you toward where the lift is now. So set the height first (on the ground is fine), wait for green, then fly up to it and let go. Helmsman never turns the AGG off: getting up, stopping the seat and the autopilot leave it as it is. Only Alt+G or `agg off` turns it off.
-- **AGG trips (autopilot):** with the AGG on (and pulsors linked), sending the AP to a spot on the planet you're on makes it **stay in the air**: the destination becomes the point over the spot at the AGG height (above sea level, as the AGG works), so a Navigator or pasted ground spot works as is. If the AGG height clears the planet's highest ground by 100 m, the AP flies the whole trip at the AGG height and the AGG carries the weight. If not, it cruises at the normal safe height and comes down to the AGG height near the spot. It stops over the spot with the brakes held and the AGG holding; it never lands. A spot saved in the air at the AGG height (within 30 m below to 25 m above it) counts as an AGG trip too: it flies there at that height and holds. A normal trip (landing) is flown instead when the spot is higher than the AGG height, or for a map pick (ground height unknown) when the AGG height is below the highest ground; the chat says why. If it can't bank round toward the target, it stops in the air instead of landing. Trips from space or another planet: when the descent over the spot starts and the AGG is on (same checks), the descent stops at the AGG height over the spot and holds there with the brakes on, instead of landing; the chat says which it will do.
-- **Auto-warp (opt-in):** the `AutoWarp` parameter, or `autowarp on` / `off` in chat for this session. With it on, set the warp destination on the map as usual (scripts can't pick it); when it's where the AP is going (same planet/moon, or a point within 10% of the AP's distance) and the drive reads READY, the AP warps by itself during the space part of the trip, then carries on to the spot after the jump (brake to cancel). The HUD's WARP row shows AUTO (green) or why not (amber). Off by default: Helmsman never warps unless asked.
-- **Safe mass:** while landed or stopped, the FLIGHT panel's brake-distance row shows `MASS · SAFE` (mass now · safe mass, and what limits it). Safe mass uses ArchHUD's rule of thumb: half of what the atmo engines, space engines, hovers or brakes could hold against gravity here (2:1), and the lowest one counts. Amber within 10%, red when over. Chat: `mass` lists all four and how much room is left.
-- **Rockets:** B fires and stops them by hand, as in the stock script; the HUD shows a red ROCKETS tag while they're on, and the sit-down thrust line lists their thrust. During an AP climb, if the climb is struggling (the check behind CAN'T CLIMB), the AP fires them, and turns them off again at 92% of the burn speed, once the ship is climbing well, or when the climb ends. Chat: `rockets` shows their status; `rockets test` makes the next AP climb fire them for up to 15 s.
-- **Down push on descents:** on a landing or AGG arrival from high up, engines that face up (the thrust line's "Down" figure) push the fall up to the speed the braking plan allows, then stop. They're never used while braking or in the slow final stretch. The braking plan and burn-speed cap are unchanged.
-- **Water:** hovers and vertical boosters see the water surface, but a ship can't settle on it. When a landing (G or AutoLand) touches the surface near sea level and keeps sinking, Helmsman switches to hover, and the ship floats HoverHeight above the water with the brakes held so it doesn't drift. Press G there to sink and land on the bottom. A spot saved under water (below sea level) skips the stop and sinks straight to it. A beach at sea level stops the ship, so it lands as normal.
-- **Telemeter (optional):** hovers see the ground only ~15 m down, so a landing onto a map pick (ground height unknown) comes down at about 50 km/h. A telemeter mounted pointing straight down sees ~100 m, so it can come down much faster and still stop in time. Helmsman uses a telemeter only after a reading shows it pointing down, for example while parked when you sit down.
-- **Parking heading:** add `|hdg=N` after a `::pos{}` (pasted, or from Navigator) and the ship parks facing that way: N is a compass heading in degrees, 0 = north (toward the planet's pole, the axis `::pos` latitude uses), 90 = east. A landing holds the heading all the way down, so it has turned while still high up, and doesn't go below the fast descent's end (DescentHeight over the spot) until it faces it. An AGG trip, or a landing without the descent, turns in place over the spot on the brakes before holding or setting down. It gives up after 60 s and says so. Chat: `hdg` shows which way the nose faces; `hdg N`, `hdg here` or `hdg off` set the current target's parking heading.
-- **Warp drive (auto-linked by the `.conf`; link it yourself for the paste install):** pick the destination on the in-game map as usual. A single WARP line under the key hints shows the drive's status (READY / cooling down / planet too close / not enough cells / no destination…), the destination and distance, and warp cells needed / aboard (red if not enough). Jump with the game's own warp key (Alt+J) as usual; the script only displays warp info. While DU is warping, the script stops all engine and brake commands so it never fights the jump. If the AP was flying when the warp started, it resumes by itself about a second after you drop out (press brake during the warp to cancel that).
-
-The startup lines report `radars=N`, `warp=OK|none` and `N fuel tanks read`.
-
-## Custom atlas (other servers)
-
-Private and community servers can have different planets. The script uses DU's atlas to convert planet-relative `::pos{}` coordinates and to route around planets, so it needs the right atlas for the server you play on.
-
-1. Put the server's atlas file (a Lua file returning the atlas table) in `Game\data\lua\autoconf\custom\`. `Game\data\lua\` also works.
-2. Right-click the seat → *Advanced* → *Edit Lua Parameters* → set **CustomAtlas** to the file name without `.lua` (e.g. `atlas_myserver`).
-3. Restart the seat. The console line shows which atlas was loaded and how many bodies it found. If the file can't be found, it warns and falls back to the game's default atlas.
-
-This uses the same parameter name and lookup as Navigator's `CustomAtlas`, so one atlas file serves both. Planets from every star system in the file are used.
-
-## For ship builders (DRM)
-
-Every setting is an **export parameter**, including the atlas. Owners can change them through *Edit Lua Parameters* on a DRM-protected seat, so you never need to remove DRM for a buyer on another server or with different preferences. The paste install finds linked elements by class, so no particular link order is required either.
-
-Chat commands like `speed` and `stopdist` change the setting for the current session only. The parameter value comes back on restart.
+`Helmsman_ECU.conf` takes over when you leave the seat while flying. Copy it to `...\autoconf\custom\`, then right-click the ECU → *Advanced* → *Run custom autoconfigure* → **Helmsman ECU**. It links the core, a hover or vertical booster and a telemeter by itself. You can also link the databank you share with Helmsman by hand: the ECU then knows straight away that the telemeter points down.
+- **Near a planet:** levels the ship, stops any drift, and hovers at `HoverHeight` over ground or water. From high up it falls no faster than `MaxFall` until the hovers see something. With a telemeter pointing down it can fall faster (up to `MaxFallTele`) and still slow down in time.
+- **Under water:** holds that exact spot with the engines.
+- **In space:** brakes to a stop.
+- **Fuel:** every minute it prints how long the fuel will last. When the tanks feeding the running engines have less than `LandMinutes` left, it lands and switches off.
+- When it takes over it prints what it found linked. It never touches the AGG.
 
 ## Controls
 
 | Key | Action |
 |---|---|
-| Alt+1 | Engage / disengage autopilot |
+| Alt+1 | Engage / disengage the autopilot (on the ground: take off) |
 | Alt+2 | Clear target |
-| Alt+3 | Toggle HUD |
+| Alt+3 | Hide / show the HUD |
 | Alt+4 | Switch Flight / Maneuver mode |
 | Alt+5 | Park hold: stop, then hold position (rotation stays free) |
 | Alt+6 | Fighter-style attitude HUD on/off |
 | Ctrl+Alt | Brake lock on/off (plain Ctrl is still hold-to-brake) |
-| G | Lift off to hover height / land (gear, hovers and vertical boosters) |
-| Brake, throttle, pitch/yaw, stop engines | Disengages the AP (you take over) |
+| G | Hover / land (gear, hovers and vertical boosters) |
+| B | Rockets on/off |
+| Alt+G | Anti-grav on/off |
+| Brake, throttle, pitch/yaw, stop engines | Disengage the autopilot (you take over) |
 
-Lua chat: `::pos{...}`, `goto ::pos{...}`, `ap`, `ap on`, `ap off`/`stop`, `clear`, `hud`, `speed N` (km/h cap, 0 = max), `stopdist N`, `navinfo on/off`, `brakes` / `brakes reset` (measured braking per speed band; learned and saved per pilot, so someone borrowing the ship starts fresh and doesn't change yours), `ahead N` (test target in empty space N su off the nose), `radar` (contacts and what DU reports about them), `target`, `help`.
+While landed with the brake lock on, the movement keys are ignored, so a navigation script that uses the arrow keys can't lift the ship off the pad. G or Alt+1 takes off; Ctrl+Alt releases the lock.
+
+Type `help` in Lua chat for every chat command. Common ones: `::pos{...}` (fly there), `ap` / `ap off`, `clear`, `target`, `speed N` (cruise cap, km/h), `thrust` (engine push in all six directions), `mass`, `fuel`, `radar`, `agg N`, `hdg N`, `hudtheme NAME`, `hud bottom N`, `settings` (what's saved on the databank).
+
+## Flying with the autopilot
+
+### Setting a target
+- **Paste** a `::pos{...}` (or `Name ::pos{...}`) into Lua chat. In space the autopilot starts at once (`AutoEngagePaste`); on the ground or in the air it sets the target and waits for Alt+1. Only your own Alt+1 / `ap` / `go` ever starts a take-off.
+- **Navigator:** NAVIGATE in Navigator and the target appears here.
+- **Map picks** (a spot picked on DU's map) usually have altitude 0, so the ground height is unknown. The autopilot then stops its fast descent above the planet's highest ground and comes down carefully from there until it sees the ground.
+- **Parking heading:** add `|hdg=N` after a `::pos{}` (pasted, or from Navigator). N is a compass heading in degrees, 0 = north (toward the planet's pole), 90 = east. A landing turns to face it while still high up and doesn't go below the end of the fast descent until it faces it. An AGG trip, or a landing without the descent, turns in place over the spot first. It gives up after 60 s and says so. Chat: `hdg` shows which way the nose faces; `hdg N`, `hdg here` or `hdg off` set the current target's heading.
+
+### In space
+The autopilot turns toward the target, burns, cruises and brakes to a full stop. Targets in space stop `StopDistance` short; spots on a planet or moon stop right over the spot. If a planet or moon is in the way, it adds corner points outside the body's atmosphere plus `PlanetClearance`, and drops them as soon as the straight line is clear.
+
+### Take-off (Alt+1 on the ground or in the air)
+1. **LIFT:** hovers / vertical boosters lift the ship to hover height, as G does. If they can't get it there, the take-off stops with a NOT ENOUGH LIFT popup and the ship keeps hovering.
+2. **LINE UP:** brakes on, the ship turns level toward the destination.
+3. **CLIMB:** main engines. The nose only comes up as forward speed builds, and comes back down if the speed drops, so the ship is never steep and slow. The climb angle comes from thrust-to-weight, up to 45°. Speed stays under 85% of the burn speed. If a heavy ship struggles and has rockets, the autopilot fires them and turns them off again near the burn speed or once it's climbing well. If it still can't climb, a trip in the atmosphere cruises at the height it reached, and a trip to space shows CAN'T REACH SPACE so you can take over.
+4. Turns are flown like a plane: heading changes round the vertical only, banking into the turn at speed. A target well to the side or behind starts a banked **TURN** that keeps flying speed. If the ship can't come round, the autopilot lands where it is with a CAN'T TURN popup (a flat turn would stall a ship that isn't hovering).
+5. Once out of the atmosphere, the space autopilot takes over.
+
+### Landing on a surface spot
+The autopilot flies to a point straight above the spot, outside the atmosphere and the highest terrain, and stops right on it. With **AutoLand** on (default) it then descends straight down:
+- **Fast part:** gravity does the accelerating, and engines that face up push the fall to speed high up. The brakes keep the speed under 85% of the burn speed and plan the stop. The fast part ends `DescentHeight` (100 m) above the spot, or above the highest terrain for a map pick.
+- **Holding over the spot all the way down:** the ship tilts its belly toward where it needs to go (a falling ship slides toward its low side) by pitch or roll, up to 20°, in air thick enough for it to work. It can also turn to face the spot and give the main engines small pushes.
+- **Slow part:** with hovers or vertical boosters, it keeps coming down slowly, still holding over the spot, until the hovers see the ground. With a telemeter pointing down it comes down much faster, slowing as soon as the telemeter sees the ground.
+- **Landing:** the normal landing sets you down and reports the touchdown speed and how far from the mark it landed.
+
+Brake at any time stops it; Alt+1 above the spot carries on down. AutoLand off: it stops above and waits for G.
+
+### Trips on the same planet
+When the destination is on the planet you're on (or flying over) and that planet has an atmosphere, `PlanetTrips` decides:
+- **`atmo` (default):** stays in the air, however far. It climbs as steeply as the ship can manage, flattening as it speeds up, and levels off into **CRUISE** at `AtmoCruiseHeight` (raised over the highest terrain and tallest allowed buildings). Short hops climb less (a 1 km hop goes about 300 m up). It starts slowing well before the spot, eases in, and ends almost stopped right over it, then descends and lands. If down-facing engines lose too much push in thin air to hold the height, it comes down earlier, or lets the ship sink gently rather than holding the brakes.
+- **`orbit`:** climbs out and uses the space route, or the orbit hop below.
+- **`auto`:** stays in the air up to `AtmoHopMax` km, goes via orbit beyond.
+
+**Orbit hop** (`OrbitHop`, on by default): when it climbs out and the planet is in the way, it flies a low orbit round the planet at just under orbital speed, mostly coasting with the nose level, then stops over the spot and descends. Moons and airless bodies always use the normal route at full speed. Off: the normal corner route.
+
+## Landing, hovering and water
+
+- **G** lifts the ship to `HoverHeight` and lands it again. `GLandsDirect` makes G land in one press while flying. Landings come down as fast as the brakes and hovers can still stop within what they can see (`LandSpeed` 0 = automatic), and set down at `TouchdownSpeed`.
+- **Telemeter:** hovers see only about 15 m down. A telemeter mounted pointing straight down sees about 100 m, including through water. Helmsman uses it once a reading shows it pointing down (for example while parked when you sit down), and remembers that on the databank.
+- **Landing on water:** hovers see the water surface, but a ship can't settle on it. When a landing touches the water near sea level and keeps sinking, Helmsman switches to hover: the ship floats `HoverHeight` above the water with the brakes held. Press **G** to sink and land on the bottom. A spot saved under water skips the stop and sinks straight to it.
+- **Under water:** the hovers are switched off (under water they'd push flat out for the surface). Both Flight and Maneuver mode hold the depth with the engines: Space/C go up and down, let go and it holds. With a telemeter, sinking is fast and slows near the bottom.
+- **G under water** rises to the surface under control and stops at `HoverHeight` above the water with the brakes held (C cancels the rise). If the HUD shows HOVER while you're under water, the first G lands (sinks) and the second rises.
 
 ## Flight modes
 
 - **Flight** (default): throttle drives the ship forward. Vertical and lateral thrusters only fire while you press their keys. A parked ship makes no thrust at all until you press G.
-- **Maneuver**: for docking, parking and slow precise movement. Throttle, strafe and Space/C each ask for a *speed* in that direction, as a fraction of `ManeuverSpeed`. Thrusters facing every direction work together to hit it. With nothing pressed the ship holds still, and the down-facing thrusters (pushing up) carry its weight once you've lifted off with G.
+- **Maneuver:** for docking, parking and slow precise movement. Throttle, strafe and Space/C each ask for a *speed* in that direction, as a fraction of `ManeuverSpeed`, and thrusters facing every direction work together to hit it. With nothing pressed the ship holds still, and holds its height.
 
-The script checks how much thrust the ship has in each of the 6 directions. That's printed at startup and with the `thrust` command. In Maneuver mode the HUD shows `F B L R U D`, with any missing direction in red, and warns if the up thrust can't carry the ship's weight.
+The script checks how much thrust the ship has in each of the six directions. That's printed at startup and with `thrust`. In Maneuver mode the HUD shows `F B L R U D`, with any missing direction in red.
+
+## Optional features
+
+- **Fuel (no links needed):** every fuel tank is read through the core. The HUD shows a row per fuel type (ATMO / SPACE / ROCKET) with % and a bar: green above 50%, amber from 20 to 50%, red below 20%. Set the tank owner's talents once with `fueltalents A S R O C` (atmo, space and rocket tank handling, fuel tank optimization, container optimization, each 0-5); they're saved to the databank and are also parameters. A `~` before the % means a tank holds more than those talents allow, so they're set too low. `fuel` lists every tank.
+- **Radar (link by hand):** an atmo radar, a space radar, or both. DU's radar widget is shown for whichever works where you are.
+- **Collision warning:** a contact on or near your path shows above the HUD: amber `CONTACT ON PATH`, red `COLLISION — BRAKE NOW` when the brakes alone can no longer stop you short of it. It never takes over a ship you're flying yourself.
+- **Autopilot obstacle stop (`CollisionStop`):** when the autopilot is flying and a contact is on its path, it stops about 50 m before the warning zone and hands back to you. Fly round it, or press Alt+1 to carry on anyway. If the contact moves off the path, the autopilot continues by itself. It never steers round anything. Docked ships (an AGG elevator, for example) are ignored.
+- **Manual switches (link by hand):** a switch linked to the seat turns on when you sit down and off when you get up, for cabin automation (doors, force fields, lights).
+- **Anti-grav generator:** Alt+G or `agg on` / `agg off`. `agg 2500` sets the hover height (1,000 m or more), `agg here` sets it to your current altitude, `agg` prints the status. The SYSTEMS panel shows an AGG row: grey off, amber while the lift creeps to a new height, green holding, red when no pulsors are linked. The AGG holds the ship at the **lift point**, so set the height, wait for green, then fly up to it. Helmsman never turns the AGG off by itself; only Alt+G or `agg off` does.
+- **AGG trips:** with the AGG on, sending the autopilot to a spot on the planet you're on makes it **stay in the air** at the AGG height over the spot and hold there, instead of landing. If the AGG height clears the planet's highest ground, it flies the whole trip at that height. Arriving from space or another planet with the AGG on, the descent stops at the AGG height over the spot. The chat says which it will do and why.
+- **Warp drive:** a WARP line shows the drive's status, destination, distance and warp cells. Jump with DU's warp key as usual. If the autopilot was flying when the warp started, it carries on after the jump (brake during the warp to cancel that).
+- **Auto-warp (opt-in, `AutoWarp`):** set the warp destination on the map (scripts can't pick it). When it's where the autopilot is going and the drive reads READY, the autopilot warps by itself, then carries on. The WARP row shows AUTO (green) or why not (amber). Live: `autowarp on/off`.
+- **Safe mass:** while landed or stopped, the FLIGHT panel shows `MASS · SAFE`: mass now, the safe mass, and what limits it. Safe mass is half of what the atmo engines, space engines, hovers or brakes could hold against gravity here (2:1), and the lowest counts. Amber within 10%, red when over. `mass` lists all four.
+- **Rockets:** B fires and stops them by hand, with a red ROCKETS tag on the HUD. In an autopilot climb that's struggling, the autopilot fires them itself. `rockets test` makes the next climb fire them for up to 15 s.
 
 ## Settings (Edit Lua Parameters)
 
-The HUD look (theme, scale, position, opacity), Flight HUD / nav info / AutoLevel, LandSafety and the fuel talents are saved on the databank, so a new paste keeps them. A parameter left at its default uses the saved value. DU's parameter menu always shows the script's defaults, so type `settings` in Lua chat to see what is actually saved and in use. Autopilot and flight settings are not saved and come from this list.
+The HUD look (theme, scale, position, opacity), Flight HUD / nav info / AutoLevel, LandSafety and the fuel talents are saved on the databank, so a new paste keeps them: a parameter left at its default uses the saved value. DU's parameter menu always shows the defaults, so type `settings` to see what's actually saved and in use.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| CustomAtlas | atlas | Atlas file for your server (see above) |
-| MaxCruiseSpeed | 0 | AP speed cap in km/h (0 = ship max) |
+| CustomAtlas | atlas | Atlas file for your server (see below) |
+| MaxCruiseSpeed | 0 | Autopilot speed cap in km/h (0 = ship max) |
 | StopDistance | 1000 | Targets in space only: stop this many metres short. Spots on a planet or moon always stop right over the spot |
-| PlanetClearance | 10000 | Margin kept outside atmosphere/terrain when routing |
+| PlanetClearance | 10000 | Margin kept outside atmospheres and terrain when routing |
 | BrakeSafety | 0.8 | Fraction of brake force planned with (lower = brake earlier) |
-| AlignRate | 0.5 | Max AP turn rate, rad/s (lower for big ships) |
-| AutoEngagePaste | true | Pasting a ::pos{} engages immediately |
+| AlignRate | 0.5 | Max autopilot turn rate, rad/s (lower for big ships) |
+| AutoEngagePaste | true | In space, pasting a ::pos{} starts the autopilot at once |
 | StartMode | 1 | 1 = Flight, 2 = Maneuver when you sit down |
 | ManeuverSpeed | 100 | Maneuver mode top speed, km/h |
 | HoverHeight | 10 | Hover height (m) after pressing G |
-| AutoLand | true | Surface targets: descend straight down from the hold point and land. Off = stop above and wait for G |
-| PlanetTrips | atmo | Surface spot on the same atmosphere planet: `atmo` = fly there in the air (any distance), `orbit` = via space / orbit hop, `auto` = air up to AtmoHopMax, orbit beyond |
-| AtmoHopMax | 100 | `auto` only: furthest trip (km) that stays in the atmosphere |
-| AtmoCruiseHeight | 3000 | Atmosphere trips: cruise altitude (m above sea level), raised over the highest terrain / tallest allowed buildings, kept under the atmosphere top |
-| OrbitHop | true | Far side of the same atmosphere planet: low orbit at orbital speed instead of the corner route. Moons always use the normal full-speed route |
-| DescentHeight | 100 | AutoLand: metres above the spot where the fast descent ends; below it the ship comes down slowly, still holding over the spot, until the hovers see the ground (min 30) |
-| GLandsDirect | false | On: G while flying starts landing in one press. Off: G goes to hover first, then G again lands |
-| LandSpeed | 0 | Fastest landing descent, km/h. **0 = automatic**: as fast as the brakes + hovers/boosters can still stop within what they can see (weight and cargo included, brakes as measured on your own stops), up to 500 km/h and never over the burn speed. A number = your own limit. When you sit down (and with `thrust`) a line in chat says what the ship can stop from; it warns if your number is only usable high up, and if the ship can barely hold its own weight. `landsafety N` sets how hard it plans to brake |
-| TouchdownSpeed | 15 | Landing speed (km/h) for the last 2 m before touchdown, or the whole landing if no hover/booster is linked. Higher is quicker but lands harder |
-| CollisionWarn | true | Radar collision warning on the HUD (warning only) |
-| CollisionStop | true | AP stops short of a radar contact on its path and hands back to you. Manual flight is never taken over |
-| AutoWarp | false | Opt-in auto-warp: with a warp destination set on the map that is where the AP is going, the AP warps when the drive reads READY, then carries on. Live: `autowarp on/off` |
-| HudTheme | cyan | Colour theme: cyan, amber, green, red, purple, white, or `#RRGGBB`. Saved on the databank: while this is left at `cyan`, the saved colour is used, so a ship you bought may show its previous owner's colour. Change it in chat with `hudtheme NAME` (`hudtheme cyan` for the default) |
-| HudOpacity | 0.9 | Panel opacity 0.3-1. Live: `hud opacity N`, saved |
-| HudScale / HudShift / HudBottom | 1 / 0 / 7 | Live: `hud scale N`, `hud shift N`, `hud bottom N`, all saved. Size of the compact bottom HUD (1 = default, 0.8 smaller, 1.3 bigger), sideways nudge (% of screen, negative = left), distance from the bottom (% of screen height) |
-| NavInfo | true | AUTOPILOT panel (target, ETA, brake distance). Turn it off if you'd rather watch Navigator's screen; the AP phase then shows as a badge in FLIGHT. Live: `navinfo on/off`, saved |
-| FlightHudScale | 0.75 | Size of the fighter-style centre HUD |
-| FlightHud | true | Centre attitude HUD: pitch ladder, roll scale, flight path marker, AP target marker, speed / altitude. Alt+6 or `fhud` toggles; saved |
-| BurnProtect | true | Hand flying in atmosphere: engine push fades out near the burn speed, so you level off just under it (BURN LIMIT tag); the brakes only act if you go over it, e.g. diving. Steering and your throttle setting are never touched |
-| AutoLevel | true | Auto-levelling (only while hovering/landing, or in atmosphere). A LEVEL tag shows whenever it's acting. `autolevel on/off`; saved |
-| HideDUWidget | true | Hide DU's own seat panel; the HUD's FLIGHT panel shows throttle / cruise instead |
-| HideBuildHelper | true | Hide DU's BUILD HELPER bar at the top of the screen while seated; it comes back when you get up |
-| pitchSpeedFactor | 0.8 | Hand flying: how fast the nose pitches with your pitch keys (0.8 ≈ 46°/s). Lower is gentler, higher is snappier |
-| yawSpeedFactor | 1 | Hand flying: how fast the ship yaws with your yaw keys (1 ≈ 57°/s) |
-| rollSpeedFactor | 1.5 | Hand flying: how fast the ship rolls with your roll keys (1.5 ≈ 86°/s). Your roll input still counts while the AP flies |
+| AutoLand | true | Surface targets: descend and land. Off = stop above and wait for G |
+| PlanetTrips | atmo | Same-planet trips: `atmo` = in the air, `orbit` = via space, `auto` = air up to AtmoHopMax |
+| AtmoHopMax | 100 | `auto` only: furthest trip (km) that stays in the air |
+| AtmoCruiseHeight | 3000 | Cruise altitude (m above sea level) for trips in the air; raised over terrain and buildings |
+| OrbitHop | true | Same planet, via space: low orbit instead of the corner route |
+| DescentHeight | 100 | Metres above the spot where the fast descent ends (min 30) |
+| GLandsDirect | false | On: G while flying lands in one press. Off: G hovers first, G again lands |
+| LandSpeed | 0 | Fastest landing descent, km/h. 0 = automatic (as fast as the ship can still stop within what it sees, up to 500 km/h). The sit-down report says what the ship can stop from |
+| TouchdownSpeed | 15 | Landing speed (km/h) for the last 2 m |
+| CollisionWarn | true | Radar collision warning on the HUD |
+| CollisionStop | true | Autopilot stops short of a radar contact on its path |
+| AutoWarp | false | Opt-in auto-warp (see above). Live: `autowarp on/off` |
+| HudTheme | cyan | cyan, amber, green, red, purple, white, or `#RRGGBB`. Saved: while this is left at `cyan`, the saved colour is used, so a bought ship may show its old owner's colour. `hudtheme NAME` changes it (`hudtheme cyan` for the default) |
+| HudOpacity | 0.9 | Panel opacity 0.3-1. `hud opacity N`, saved |
+| HudScale / HudShift / HudBottom | 1 / 0 / 7 | Size, sideways nudge (% of screen, positive = right), height from the bottom (% of screen). `hud scale N`, `hud shift N`, `hud bottom N`, saved |
+| NavInfo | true | AUTOPILOT panel (target, ETA, brake distance). `navinfo on/off`, saved |
+| FlightHud | true | Centre attitude HUD (pitch ladder, flight path marker, target marker). Alt+6, saved |
+| FlightHudScale | 0.75 | Size of the centre HUD |
+| HideDUWidget | true | Hide DU's own seat panel (the HUD shows the same) |
+| HideBuildHelper | true | Hide DU's BUILD HELPER bar while seated |
+| BurnProtect | true | Hand flying in atmosphere: engine push fades near the burn speed so you level off just under it. Steering and your throttle are never touched |
+| AutoLevel | true | Auto-levelling while hovering/landing or in atmosphere. `autolevel on/off`, saved |
+| AtmoTankHandling / SpaceTankHandling / RocketTankHandling | 0 | Fuel tank handling talents (0-5) of the tanks' owner |
+| FuelTankOptimization / ContainerOptimization | 0 | Fuel mass talents (0-5) |
+| LandSafety | 0.3 | Share of the spare stopping power a landing plans with (lower = gentler). `landsafety N`, saved |
+| pitchSpeedFactor / yawSpeedFactor / rollSpeedFactor | 0.8 / 1 / 1.5 | Hand flying: how fast the ship turns with your pitch / yaw / roll keys (0.8 ≈ 46°/s, 1 ≈ 57°/s, 1.5 ≈ 86°/s) |
 
-## How the autopilot flies
+## Custom atlas (other servers)
 
-Every physics tick it computes a **desired velocity**: toward the target, at the lower of the cruise cap and the fastest speed it can still brake from (`√(2·brake·distance)`). The ship points along *desired − actual velocity* and thrusts once it's within ~3°. One rule covers accelerating, cancelling sideways drift, and cruising. When the ship is faster than it can stop from, it brakes. When it is heading well off course, it brakes while turning.
+Servers can have different planets. Helmsman uses the atlas to turn `::pos{}` coordinates into positions and to route round planets, so it needs the right atlas for your server.
 
-Before engaging, it checks the straight line against every planet and moon in DU's atlas. If one is in the way, it adds dog-leg waypoints outside the planet's clearance and drops them as soon as the direct line is clear.
+1. Put the server's atlas file in `Game\data\lua\autoconf\custom\` (`Game\data\lua\` also works).
+2. Right-click the seat → *Advanced* → *Edit Lua Parameters* → set **CustomAtlas** to the file name without `.lua`.
+3. Restart the seat. The console line shows which atlas loaded and how many bodies it has. If the file isn't found, it warns and uses the game's default.
+
+This is the same parameter and lookup as Navigator's `CustomAtlas`, so one atlas file serves both. Helmsman also guards against two kinds of atlas error seen in the wild: it works out each body's gravity from its surface gravity and radius (some custom atlases have wrong `GM` values), and it ignores a highest-ground figure of zero or below (the game's own atlas says −42 m for Alioth Moon 4).
+
+## For ship builders (DRM)
+
+Every setting is an export parameter, including the atlas, so owners can change them through *Edit Lua Parameters* on a DRM-protected seat. The paste install finds linked elements by class, so no link order is needed. Chat commands like `speed` and `stopdist` only change the current session.
 
 ## Navigator databank keys
 
 | Key | Written by | Meaning |
 |---|---|---|
-| `nav_ap_dest` | Navigator | `NAME\|::pos{...}`, optionally `\|hdg=N` on the end (parking heading). Read, then cleared, by Helmsman |
-| `nav_print` | Navigator | `NAME\|::pos{...}` from PRINT COORDS. Helmsman prints it to Lua chat (`[NAV] NAME`, then the `::pos{}` on its own line) and clears it. Never used as a destination. Lets a switch-started Navigator PB, which can't print, still show coordinates |
+| `nav_ap_dest` | Navigator | `NAME\|::pos{...}`, optionally `\|hdg=N` on the end. Read, then cleared, by Helmsman |
+| `nav_print` | Navigator | `NAME\|::pos{...}` from PRINT COORDS. Helmsman prints it to Lua chat and clears it |
 | `autofly` | Navigator | `1` = engage automatically on a new destination |
 | `sf_target` | Helmsman | Current target, restored when you sit back down |
 
+## How the autopilot flies
+
+Every physics tick it works out a **desired velocity**: toward the target, at the lower of the cruise cap and the fastest speed it can still brake from (`√(2·brake·distance)`). The ship points along *desired − actual velocity* and thrusts once it's lined up. One rule covers accelerating, cancelling sideways drift and cruising. It measures the ship's real braking on each stop and plans later stops with it.
+
+## Building from source
+
+```
+node build.js          # dist/Helmsman_v1.0.txt and .conf, comments stripped
+node build.js --full   # the same with all comments, for reading
+```
+
+The source is `src/flight.lua`; the ECU is `ecu/Helmsman_ECU.conf`.
+
 ## Credits
 
-- **Sagacious (SagaHUD)**: keeping the ship steered over the destination through the whole descent is the idea that makes SAGA land on the spot. Sagacious released the SAGA source for others to build on; Helmsman uses the idea with its own code (nose kept level, no tilting).
+Helmsman is its own code, but several of its ideas come from other DU scripts:
+
+- **SagaHUD by Sagacious:** steering the ship over the destination through the whole descent, tilting the belly toward the target to slide onto it, plane-style banked turns, and starting to slow well before the spot. Sagacious released the SAGA source for others to build on.
+- **ArchHUD (Archaegeo and contributors):** the 2:1 safe-mass rule, the rocket on/off governor for climbs (Dodgin's idea), turning seat-linked switches on while seated, starting to slow well before the spot, and the ECU's use of DU's hover hold over ground and water.
+- **Novaquark:** DU's standard flight model and Navigator library, which manual flight is built on.

@@ -22,7 +22,7 @@ event=onStart
 --  Every setting below is an export parameter, so on a DRM-protected
 --  seat owners can still change them via "Edit Lua Parameters".
 -- ════════════════════════════════════════════════════════════════════
-VERSION = "0.1.0"
+VERSION = "1.0.0"
 BUILD   = "dev"   -- stamped by build.js (date-time), shown on the HUD so you can tell which paste is running
 
 -- ── Server ────────────────────────────────────────────────────────
