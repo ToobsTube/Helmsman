@@ -22,7 +22,7 @@ event=onStart
 --  Every setting below is an export parameter, so on a DRM-protected
 --  seat owners can still change them via "Edit Lua Parameters".
 -- ════════════════════════════════════════════════════════════════════
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 BUILD   = "dev"   -- stamped by build.js (date-time), shown on the HUD so you can tell which paste is running
 
 -- ── Server ────────────────────────────────────────────────────────
@@ -4187,7 +4187,15 @@ function FlightFlush()
     local acm = Nav.axisCommandManager
     local gAcc = acm:composeAxisAccelerationFromThrottle('thrust analog vertical', axisCommandId.vertical)
     -- (under water in Maneuver: hovers off, the engines hold the depth)
-    Nav:setEngineForceCommand('ground', (man and underwater) and vec3() or GroundCmd(gAcc), keep, '', '', '', tol)
+    -- (under water in Maneuver: DU's hover hold is off; the hovers /
+    -- boosters get the vertical part of the depth hold, so ships whose only
+    -- upward push is hovers/boosters hold a depth too)
+    local gCmd = GroundCmd(gAcc)
+    if man and underwater then
+      local wvM = vec3(core.getWorldVertical())
+      gCmd = (wvM:len() > 0.5) and wvM * manAcc:dot(wvM) or vec3()
+    end
+    Nav:setEngineForceCommand('ground', gCmd, keep, '', '', '', tol)
   else
     -- Manual flight: DU's standard throttle / cruise-control handling
     local acm = Nav.axisCommandManager
@@ -4234,8 +4242,10 @@ function FlightFlush()
         local below = (p - ManHoldPos):dot(wvD)            -- + = sunk below the held depth
         local vWant = clamp(below * 0.8, -10, 10)
         local vUpNow = -vel:dot(wvD)
-        Nav:setEngineForceCommand(vrtTags, -wvD * ((vWant - vUpNow) * 1.0) - gW, keep, 'airfoil', '', '', tol)
-        Nav:setEngineForceCommand('ground', vec3(), keep)
+        -- (hovers / vertical boosters help too, asked for just the push
+        -- needed — a ship with no other upward thrust still holds; DU's own
+        -- hover hold, which pushes flat out under water, stays off)
+        Nav:setEngineForceCommand(vrtTags, -wvD * ((vWant - vUpNow) * 1.0) - gW, keep, 'airfoil', 'ground', '', tol)
       else
         -- No vertical input: vertical THRUSTERS stay silent (otherwise DU
         -- uses them to float the ship against gravity). Order matters —

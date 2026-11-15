@@ -42,7 +42,7 @@ When the destination is on the planet you're on (or flying over) and that planet
 - **G** lifts the ship to `HoverHeight` and lands it again. `GLandsDirect` makes G land in one press while flying. Landings come down as fast as the brakes and hovers can still stop within what they can see (`LandSpeed` 0 = automatic), and set down at `TouchdownSpeed`.
 - **Telemeter:** hovers see only about 15 m down. A telemeter mounted pointing straight down sees about 100 m, including through water. Helmsman uses it once a reading shows it pointing down (for example while parked when you sit down), and remembers that on the databank.
 - **Landing on water:** hovers see the water surface, but a ship can't settle on it. When a landing touches the water near sea level and keeps sinking, Helmsman switches to hover: the ship floats `HoverHeight` above the water with the brakes held. Press **G** to sink and land on the bottom. A spot saved under water skips the stop and sinks straight to it.
-- **Under water:** the hovers are switched off (under water they'd push flat out for the surface). Both Flight and Maneuver mode hold the depth with the engines: Space/C go up and down, let go and it holds. With a telemeter, sinking is fast and slows near the bottom.
+- **Under water:** DU's own hover hold is switched off (under water it would push flat out for the surface). Both Flight and Maneuver mode hold the depth with whatever pushes up, engines, hovers or vertical boosters, asking each for just what's needed: Space/C go up and down, let go and it holds. With a telemeter, sinking is fast and slows near the bottom.
 - **G under water** rises to the surface under control and stops at `HoverHeight` above the water with the brakes held (C cancels the rise). If the HUD shows HOVER while you're under water, the first G lands (sinks) and the second rises.
 
 ## Flight modes
@@ -69,7 +69,7 @@ The script checks how much thrust the ship has in each of the six directions. Th
 ## Emergency control unit (ECU)
 `Helmsman_ECU.conf` takes over when you leave the seat while flying. Copy it to `...\autoconf\custom\`, then right-click the ECU → *Advanced* → *Run custom autoconfigure* → **Helmsman ECU**. It links the core, a hover or vertical booster and a telemeter by itself. You can also link the databank you share with Helmsman by hand: the ECU then knows straight away that the telemeter points down.
 - **Near a planet:** levels the ship, stops any drift, and hovers at `HoverHeight` over ground or water. From high up it falls no faster than `MaxFall` until the hovers see something. With a telemeter pointing down it can fall faster (up to `MaxFallTele`) and still slow down in time.
-- **Under water:** holds that exact spot with the engines.
+- **Under water:** holds that exact spot with the engines, hovers and boosters.
 - **In space:** brakes to a stop.
 - **Fuel:** every minute it prints how long the fuel will last. When the tanks feeding the running engines have less than `LandMinutes` left, it lands and switches off.
 - When it takes over it prints what it found linked. It never touches the AGG.
@@ -147,7 +147,7 @@ Every physics tick it works out a **desired velocity**: toward the target, at th
 ## Building from source
 
 ```
-node build.js          # dist/Helmsman_v1.0.txt and .conf, comments stripped
+node build.js          # dist/Helmsman_v1.0.1.txt and .conf, comments stripped
 node build.js --full   # the same with all comments, for reading
 ```
 
