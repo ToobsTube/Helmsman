@@ -23,7 +23,7 @@ Helmsman works on its own. It's also the companion to **DU Starmap Navigator**: 
 
 Download the files from the **Releases** page: `Helmsman_v1.0.txt`, `Helmsman_v1.0.conf` and (optional) `Helmsman_ECU.conf`.
 
-### Option A: paste (recommended; use this for DRM ships)
+### Option A: paste
 1. Link the **core unit** to the seat, cockpit or remote controller. Any slot, any order: the script finds each element by what it is. Optionally also link:
    - the **databank shared with Navigator** (also keeps your settings across new pastes)
    - **one hover or vertical booster** (landings read the distance to the ground)
