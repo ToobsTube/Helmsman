@@ -1876,14 +1876,16 @@ function APDescentStep(pos, vel, fwd, up, mass)
       DA.mT = nil
     end
     DA.pB = AP.brake or 0
-    -- Measured beats DU's figure either way: DU's was 3x too LOW on the
-    -- Hammer Crest (it said a 139 km/h floor; Carl's real one is ~50).
-    if DA.Am then A = DA.Am * 0.9 end
+    -- Measured only ever makes the plan MORE careful. Trusting a higher
+    -- measured figure (3x DU's on the Hammer Crest) relaxed the plan 150 m
+    -- up and it came into the last stretch at 407 km/h (1114-2052).
+    if DA.Am then A = mmin(A, DA.Am * 0.6) end
     DA.A = A
     local vF = 100 * gB / mmax(A, 0.1)                   -- floor speed: brakes = gravity
     local vEnd = mmax(vF * 1.15, 3)
     DA.vF = vF
     if goal <= 100 and not DA.v100 then DA.v100 = vDown end
+    if goal <= 0 and not DA.v0 then DA.v0 = vDown end
     -- Distance to slow from v to vEnd with fading brakes (numeric).
     local function slowDist(v)
       if v <= vEnd then return 0 end
@@ -1897,9 +1899,12 @@ function APDescentStep(pos, vel, fwd, up, mass)
       end
       return d
     end
-    local room = goal - 80
+    -- (Carl's way by hand: full brakes from well above, the fall settles
+    -- at the floor speed, the AGG catches it. The last 200 m is full brakes,
+    -- so the real — stronger — brakes get it down to their real floor.)
+    local room = goal - 200
     if room <= 0 then
-      vmax = 0                                           -- last 80 m: full brakes into the AGG
+      vmax = 0                                           -- last 200 m: full brakes into the AGG
     else
       local lo, hi = vEnd, mmax(vmax, vEnd)
       if slowDist(hi) > room then
@@ -2116,9 +2121,10 @@ function APDescentStep(pos, vel, fwd, up, mass)
       local low = D0.minGoal
       AP.descent = false
       AggArrive()
-      system.print(string.format("[HELM] AGG stop: %s · %s 100 m above · full-brake floor ~%.0f km/h (brakes %.0f m/s²%s)",
+      system.print(string.format("[HELM] AGG stop: %s · %s 100 m above, %s at the height · full-brake floor ~%.0f km/h (brakes %.0f m/s²%s)",
         low < -0.5 and string.format("dipped %.0f m below the AGG height", -low) or "no dip below the AGG height",
         D0.v100 and string.format("%.0f km/h", D0.v100 * 3.6) or "?",
+        D0.v0 and string.format("%.0f km/h", D0.v0 * 3.6) or "?",
         (D0.vF or 0) * 3.6, D0.A or 0, D0.Am and ", measured" or ", DU's figure"))
     end
     return
@@ -4694,7 +4700,10 @@ function DrawHUD()
       '.hb{position:absolute;left:'..HudShift..'vw;width:100vw;bottom:'..HudBottom..'vh;text-align:center;'..
       'font-family:Montserrat,Arial,sans-serif;font-size:12px;color:#d8e2ea}'..
       '.in{display:inline-block;text-align:left;transform:scale('..sc..');transform-origin:50% 100%}'..
-      '.cols{display:flex;gap:8px;align-items:stretch}'..
+      -- (fixed minimum height: the bar sits on the screen bottom, so rows
+      -- coming and going — predicted miss, tags, notes — made the panel
+      -- tops jump up and down as the AP changed phase; Carl, 1114)
+      '.cols{display:flex;gap:8px;align-items:stretch;min-height:172px}'..
       '.p{width:15vw;min-width:230px;background:rgba('..bgc..','..op..');border:1px solid rgba('..acc..',.32);'..
       'border-top:2px solid rgb('..acc..');border-radius:4px;padding:6px 10px}'..
       '.p.ap{width:18vw;min-width:270px}'..
@@ -4703,7 +4712,7 @@ function DrawHUD()
       '.ph{padding:1px 6px;border-radius:3px;color:#05090e;letter-spacing:1px}'..
       '.big{font-size:18px;font-weight:700;line-height:1.1}.big small{font-size:11px;font-weight:400;color:#9aa8b5}'..
       '.tg{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}'..
-      '.nt{font-size:10px;color:#9aa8b5}'..
+      '.nt{font-size:10px;color:#9aa8b5}.p.ap .nt{min-height:26px}'..
       '.r{display:flex;justify-content:space-between;margin-top:3px}'..
       '.k{color:#8a98a6;font-size:10px;letter-spacing:1px}.v{font-weight:600}'..
       '.bar{height:3px;background:rgba(255,255,255,.1);border-radius:2px;margin-top:5px}'..
