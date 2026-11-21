@@ -13,12 +13,15 @@ The full manual. For what Helmsman does, how to install it and the controls, see
 ### In space
 The autopilot turns toward the target, burns, cruises and brakes to a full stop. Targets in space stop `StopDistance` short; spots on a planet or moon stop right over the spot. If a planet or moon is in the way, it adds corner points outside the body's atmosphere plus `PlanetClearance`, and drops them as soon as the straight line is clear.
 
+Coming in to a planet, the braking plan counts all the speed gravity will add between the ship and the stop point, so ships with weak brakes start slowing early enough. Climbing up to the stop point, it counts gravity's help instead, so it doesn't stop short.
+
 ### Take-off (Alt+1 on the ground or in the air)
-1. **LIFT:** hovers / vertical boosters lift the ship to hover height, as G does. If they can't get it there, the take-off stops with a NOT ENOUGH LIFT popup and the ship keeps hovering.
-2. **LINE UP:** brakes on, the ship turns level toward the destination.
-3. **CLIMB:** main engines. The nose only comes up as forward speed builds, and comes back down if the speed drops, so the ship is never steep and slow. The climb angle comes from thrust-to-weight, up to 45°. Speed stays under 85% of the burn speed. If a heavy ship struggles and has rockets, the autopilot fires them and turns them off again near the burn speed or once it's climbing well. If it still can't climb, a trip in the atmosphere cruises at the height it reached, and a trip to space shows CAN'T REACH SPACE so you can take over.
-4. Turns are flown like a plane: heading changes round the vertical only, banking into the turn at speed. A target well to the side or behind starts a banked **TURN** that keeps flying speed. If the ship can't come round, the autopilot lands where it is with a CAN'T TURN popup (a flat turn would stall a ship that isn't hovering).
-5. Once out of the atmosphere, the space autopilot takes over.
+1. **LIFT:** hovers / vertical boosters lift the ship to hover height, as G does, with the brakes held. If they can't get it there, the take-off stops with a NOT ENOUGH LIFT popup and the ship keeps hovering. A heavy ship whose hovers reach at least 60% of the hover height (and 4 m) carries on, with a note.
+2. **LINE UP:** brakes on, the ship turns level toward the destination. A take-off that starts already hovering also holds the brakes until it faces the right way. With a radar linked, it then checks straight ahead: a construct within about 250 m in front, at about your height, holds the take-off here with a CONSTRUCT AHEAD popup. Fly clear by hand, or press Alt+1 to go anyway.
+3. **CLIMB:** main engines. It starts with about 3 s of full throttle against the brakes, so the engines spool up before it sets off. The nose only comes up as forward speed builds, so the ship is never steep and slow. The climb angle comes from the push the engines really give, measured as it climbs (DU's own figure is for thick air), up to `MaxClimbAngle`. **Speed first:** if the ship keeps losing speed in the air, the nose comes down until the speed builds again. At the speed cap with the brakes taking the spare push, the nose goes up instead, so that push goes into height. Speed stays under 85% of the burn speed until the last 2% of air. If a heavy ship struggles and has rockets, the autopilot fires them and turns them off again near the burn speed or once it's climbing well.
+4. **Can't climb any higher:** a trip in the atmosphere cruises a little below the height it reached. A trip heading for space to a spot on the **same planet** shows STAYING IN THE AIR and flies the rest as a trip in the air (at `AtmoCruiseHeight`, or lower if that's too high for the ship). A trip to another planet shows CAN'T REACH SPACE so you can take over.
+5. Turns are flown like a plane: heading changes round the vertical only, banking into the turn at speed. A target well to the side or behind starts a banked **TURN** that keeps flying speed. If the ship can't come round, the autopilot lands where it is with a CAN'T TURN popup (a flat turn would stall a ship that isn't hovering).
+6. Once out of the atmosphere, the space autopilot takes over. If it's already above the air near the spot, it stays at about that height over the spot instead of climbing to the usual stop point outside the atmosphere.
 
 ### Landing on a surface spot
 The autopilot flies to a point straight above the spot, outside the atmosphere and the highest terrain, and stops right on it. With **AutoLand** on (default) it then descends straight down:
@@ -28,6 +31,8 @@ The autopilot flies to a point straight above the spot, outside the atmosphere a
 - **Landing:** the normal landing sets you down and reports the touchdown speed and how far from the mark it landed.
 
 Brake at any time stops it; Alt+1 above the spot carries on down. AutoLand off: it stops above and waits for G.
+
+**Trip done:** a landing within 300 m of the spot, or a stop at a target in space, clears the target ("Trip done — target cleared"), so sitting down again doesn't bring back a trip you've finished. A saved target you're already at when you sit down is dropped too, and so is a Navigator destination you're already at while landed.
 
 ### Trips on the same planet
 When the destination is on the planet you're on (or flying over) and that planet has an atmosphere, `PlanetTrips` decides:
@@ -50,6 +55,8 @@ When the destination is on the planet you're on (or flying over) and that planet
 
 - **Flight** (default): throttle drives the ship forward. Vertical and lateral thrusters only fire while you press their keys. A parked ship makes no thrust at all until you press G.
 - **Maneuver:** for docking, parking and slow precise movement. Throttle, strafe and Space/C each ask for a *speed* in that direction, as a fraction of `ManeuverSpeed`, and thrusters facing every direction work together to hit it. With nothing pressed the ship holds still, and holds its height.
+
+**Altitude hold** (Flight mode, hand flying in the atmosphere): **Alt+7** holds your height with the nose, while steering, roll and throttle stay yours. Pressing pitch only pauses it: let go and it goes back to the held height, so you can pull through banked turns. The normal burn protection still applies. Alt+7 after turning it off goes back to the last height you held (this time in the seat; nothing is saved). Chat: `alt N` holds N m above sea level (and changes it mid-flight), `alt here` holds the height you're at, `alt` / `alt off` toggle. The FLIGHT panel shows **ALT HOLD N m** while it's on. It turns off when you press Alt+7, engage the autopilot, switch to Maneuver mode, leave the atmosphere or land with G.
 
 The script checks how much thrust the ship has in each of the six directions. That's printed at startup and with `thrust`. In Maneuver mode the HUD shows `F B L R U D`, with any missing direction in red.
 
@@ -95,6 +102,7 @@ The HUD look (theme, scale, position, opacity), Flight HUD / nav info / AutoLeve
 | PlanetTrips | atmo | Same-planet trips: `atmo` = in the air, `orbit` = via space, `auto` = air up to AtmoHopMax |
 | AtmoHopMax | 100 | `auto` only: furthest trip (km) that stays in the air |
 | AtmoCruiseHeight | 3000 | Cruise altitude (m above sea level) for trips in the air; raised over terrain and buildings |
+| MaxClimbAngle | 45 | Steepest take-off climb, degrees (10-60). Weaker ships pick a gentler angle themselves |
 | OrbitHop | true | Same planet, via space: low orbit instead of the corner route |
 | DescentHeight | 100 | Metres above the spot where the fast descent ends (min 30) |
 | GLandsDirect | false | On: G while flying lands in one press. Off: G hovers first, G again lands |
@@ -139,7 +147,7 @@ Every setting is an export parameter, including the atlas, so owners can change 
 | `nav_ap_dest` | Navigator | `NAME\|::pos{...}`, optionally `\|hdg=N` on the end. Read, then cleared, by Helmsman |
 | `nav_print` | Navigator | `NAME\|::pos{...}` from PRINT COORDS. Helmsman prints it to Lua chat and clears it |
 | `autofly` | Navigator | `1` = engage automatically on a new destination |
-| `sf_target` | Helmsman | Current target, restored when you sit back down |
+| `sf_target` | Helmsman | Current target, restored when you sit back down; `none` once a trip is done or the target is cleared |
 
 ## How the autopilot flies
 
@@ -148,7 +156,7 @@ Every physics tick it works out a **desired velocity**: toward the target, at th
 ## Building from source
 
 ```
-node build.js          # dist/Helmsman_v1.0.2.txt and .conf, comments stripped
+node build.js          # dist/Helmsman_v1.0.3.txt and .conf, comments stripped
 node build.js --full   # the same with all comments, for reading
 ```
 

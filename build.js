@@ -24,7 +24,7 @@
 const fs   = require('fs');
 const path = require('path');
 
-const VERSION = 'v1.0.2';
+const VERSION = 'v1.0.3';
 const NAME    = `Helmsman ${VERSION}`;
 const SRC     = path.join('src', 'flight.lua');
 const OUT_CONF = path.join('dist', `Helmsman_${VERSION}.conf`);
