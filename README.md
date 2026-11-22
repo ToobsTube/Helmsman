@@ -73,6 +73,22 @@ While landed with the brake lock on, the movement keys are ignored, so a navigat
 
 Type `help` in Lua chat for every chat command. Common ones: `::pos{...}` (fly there), `ap` / `ap off`, `clear`, `target`, `speed N` (cruise cap, km/h), `thrust` (engine push in all six directions), `mass`, `fuel`, `radar`, `agg N`, `alt N` (hold N m above sea level), `hdg N`, `hudtheme NAME`, `hud bottom N`, `settings` (what's saved on the databank).
 
+## Roadmap
+
+**Done since v1.0.3** (in testing):
+- Air arrival round the far side of a planet: in along the planet's edge at orbital speed, round toward the spot, then glide into the air and fly the rest in the air
+- PvP / safe zone row on the HUD, with a warning when you cross the line
+- `speed N` is kept after a relog
+- Take-off starts lining up 10 m off the ground
+
+**Next:**
+- A smoother stop in space over the spot (no turning round at the end)
+- A lower stop point over moons and planets without air
+
+**Later:**
+- Testing on M-core ships
+- Retest ships with engines in every direction
+
 ## Full guide
 
 How the autopilot flies each kind of trip, landing and water, every optional feature, all the settings, custom atlases and notes for ship builders: see **[GUIDE.md](GUIDE.md)**.
